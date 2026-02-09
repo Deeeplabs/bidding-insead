@@ -3,681 +3,204 @@ schema: spec-driven
 # =============================================================================
 # INSEAD Bidding System - OpenSpec Configuration
 # =============================================================================
-# Comprehensive context for AI assistants working with this brownfield project.
-# All project specifications are centralized in this single file.
+# Brownfield project context for AI assistants.
+# Context is injected into ALL artifact prompts.
+# Rules are injected only into their matching artifact.
 # =============================================================================
 
 context: |
-  # INSEAD Bidding System - Complete Project Context
-  
-  A comprehensive course bidding platform for INSEAD business school.
-  This is a brownfield project with established patterns and conventions.
-  
-  ═══════════════════════════════════════════════════════════════════════════════
-  ## 1. SYSTEM ARCHITECTURE
-  ═══════════════════════════════════════════════════════════════════════════════
-  
-  ```
-  ┌─────────────────────────────────────────────────────────────────────────┐
-  │                           INSEAD Bidding System                          │
-  ├─────────────────────────────────────────────────────────────────────────┤
-  │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐       │
-  │  │   bidding-web    │  │  bidding-admin   │  │   MuleSoft       │       │
-  │  │  (Student Portal)│  │ (Admin Dashboard)│  │   (Webhooks)     │       │
-  │  │   Next.js 14     │  │    Next.js 14    │  │                  │       │
-  │  │   Port: 4006     │  │    Port: 4007    │  │                  │       │
-  │  └────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘       │
-  │           └─────────────────────┼─────────────────────┘                  │
-  │                                 ▼                                        │
-  │                    ┌────────────────────────┐                           │
-  │                    │      bidding-api       │                           │
-  │                    │    Symfony 6.4 API     │                           │
-  │                    │    (PHP 8.1+)          │                           │
-  │                    └───────────┬────────────┘                           │
-  │              ┌─────────────────┼─────────────────┐                      │
-  │              ▼                 ▼                 ▼                      │
-  │    ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐         │
-  │    │     MySQL       │ │     Redis       │ │   SSO/ADFS      │         │
-  │    │   Database      │ │     Cache       │ │   Auth          │         │
-  │    └─────────────────┘ └─────────────────┘ └─────────────────┘         │
-  └─────────────────────────────────────────────────────────────────────────┘
-  ```
-  
-  ### Monorepo Structure
-  ```
-  insead/
-  ├── bidding-api/     # Backend API (PHP/Symfony)
-  ├── bidding-admin/   # Admin Dashboard (Next.js)
-  ├── bidding-web/     # Student Portal (Next.js)
-  └── openspec/        # OpenSpec configuration
-  ```
-  
-  ═══════════════════════════════════════════════════════════════════════════════
-  ## 2. DOMAIN MODEL
-  ═══════════════════════════════════════════════════════════════════════════════
-  
-  ### Core Concepts
-  - **Campaigns**: Time-bounded bidding events with phases (Pre-Bidding, Bidding, Add-Drop)
-  - **Sessions**: Individual bidding sessions within campaigns
-  - **Bids**: Student bids on classes with point allocation
-  - **Simulations**: Calculation of bid outcomes and cutoff prices
-  - **Waitlists**: Queue management for oversubscribed courses
-  - **Campus Exchange**: Cross-campus course allocation for exchange students
-  - **Promotions**: Student cohorts/groups (e.g., MBA2024, EMBA2025)
-  
-  ### Entity Relationships
-  ```
-  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-  │   Program   │──┬──│  Promotion  │──┬──│   Student   │
-  └─────────────┘  │  └─────────────┘  │  └──────┬──────┘
-                   │  ┌─────────────┐   │         │
-                   └──│   Campus    │   │         │
-                      └─────────────┘   │         │
-  ┌─────────────┐     ┌─────────────┐   │   ┌─────┴─────┐
-  │   Course    │──┬──│   Classes   │───┴───│    Bid    │
-  └─────────────┘  │  └─────────────┘       └─────┬─────┘
-  ┌─────────────┐  │  ┌─────────────┐       ┌────┴────┐
-  │   Module    │──┘  │  Campaign   │───────│ Session │
-  └─────────────┘     └─────────────┘       └─────────┘
-  ```
-  
-  ### Core Entities
-  
-  **Campaign** - Top-level container for bidding events
-  - Fields: id, name, status (Draft/Active/Completed), start_date, end_date
-  - Relations: has_many Sessions, CampaignModules, StudentFilters, CourseFilters
-  
-  **Session** - Specific bidding round within a campaign
-  - Fields: id, name, type (Bidding/CampusExchange), phase, start_date, end_date
-  - Relations: belongs_to Campaign, has_many Bids, SessionCourses, Simulations
-  
-  **Student** - Bidding participant
-  - Fields: id, people_soft_id, email, first_name, last_name, status
-  - Relations: belongs_to Promotion, has_one StudentData, has_many Bids
-  
-  **Bid** - Student's bid on a class
-  - Fields: id, points, status (Pending/Enrolled/Waitlisted/Dropped), type (Primary/Backup)
-  - Relations: belongs_to Student, Session, Class
-  
-  **Class** - Course section offered in a term
-  - Fields: id, code, name, seats, term, section, instructor
-  - Relations: belongs_to Course, Campus, has_many ClassPromotions, Bids
-  
-  **Course** - Academic course
-  - Fields: id, code, title, credits, type (Core/Elective)
-  - Relations: belongs_to Module, has_many Classes
-  
-  ### Supporting Entities
-  - **Program**: Academic program (MBA, EMBA)
-  - **Promotion**: Student cohort (MBA2024)
-  - **Campus**: Location (Fontainebleau, Singapore, Abu Dhabi)
-  - **Module**: Course category
-  - **Simulation**: Bid allocation calculation run
-  - **Exchange**: Campus exchange student data
-  
-  ### Key Business Rules
-  
-  1. **Bid Point Allocation**
-     - Students receive fixed points per session
-     - Points distributed across selected classes
-     - Min/max points per class may apply
-  
-  2. **Enrollment Priority**
-     - Total score = bid_points + gpa_score + essay_score (exchange)
-     - Higher scores get priority; ties broken by timestamp
-  
-  3. **Phase Transitions**
-     - Pre-Bidding: Course info visible, no bidding
-     - Bidding: Active bid submission
-     - Add-Drop: Post-allocation adjustments
-     - Results: Final allocations visible
-  
-  4. **Waitlist Management**
-     - Join waitlist for full classes
-     - Auto-promotion when seats open
-     - Priority based on bid points
-  
-  ═══════════════════════════════════════════════════════════════════════════════
-  ## 3. BACKEND API (bidding-api)
-  ═══════════════════════════════════════════════════════════════════════════════
-  
-  ### Technology Stack
-  - PHP 8.1+ / Symfony 6.4
-  - Doctrine ORM 2.12+ / MySQL 8.0
-  - Redis 6.0+ (cache)
-  - NelmioApiDocBundle 4.9+ (OpenAPI docs)
-  - PHPUnit 10.5+ (testing)
-  
-  ### Request/Response Flow
-  ```
-  HTTP Request → Controller → Request DTO (validation) → Domain Service 
-  → Repository → Response DTO → HTTP Response (JSON)
-  ```
-  
-  ### Directory Structure
-  ```
-  bidding-api/src/
-  ├── Command/                 # Console commands
-  ├── Controller/Api/          # HTTP Controllers
-  │   ├── Admin/              # Admin endpoints (Campaign, Class, Session, Simulation)
-  │   ├── Student/            # Student endpoints (Bidding, CampusExchange, AddDrop)
-  │   └── Webhook/            # MuleSoft webhooks
-  ├── Domain/                  # Business Logic Services
-  │   ├── Campaign/Service/   # CampaignService, UpdateCampaignService
-  │   ├── Session/            # Session management
-  │   ├── Bid/                # Bidding operations
-  │   ├── Student/            # Student operations
-  │   └── Simulation/         # Bid simulation engine
-  ├── Dto/                     # Data Transfer Objects
-  │   ├── Request/            # Input DTOs + validation + Transformer/
-  │   └── Response/           # Output DTOs + Transformer/
-  ├── Entity/                  # Doctrine Entities
-  ├── Flow/                    # Flow Orchestration (FlowContext, BiddingFlow)
-  ├── Module/                  # Modular Operations (Setup, Bidding, AddDrop, Waitlist)
-  ├── Repository/              # Doctrine Repositories
-  ├── Security/                # Auth (ApiTokenAuthenticator, UserProvider, Voter/)
-  └── Service/                 # Cross-cutting (Mailer, Notification)
-  ```
-  
-  ### Flow/Module Architecture (for complex operations)
-  ```php
-  // FlowContext carries data between modules
-  $context = new FlowContext([
-      'student' => $student,
-      'session' => $session,
-      'request' => $body,
-  ]);
-  $result = $module->execute($context);
-  $flowResult = $flow->execute($context);
-  ```
-  
-  ### Creating API Endpoints
-  
-  **Step 1: Request DTO**
-  ```php
-  // src/Dto/Request/CreateBidRequest.php
-  class CreateBidRequest implements DtoInterface
-  {
-      #[Assert\NotBlank]
-      #[Assert\Positive]
-      public int $classId;
-  
-      #[Assert\NotBlank]
-      #[Assert\Range(min: 0, max: 1000)]
-      public int $points;
-  }
-  ```
-  
-  **Step 2: Controller**
-  ```php
-  // src/Controller/Api/Student/Bidding/CreateBidController.php
-  #[Route('/api/student/bidding/{sessionId}/bid', methods: ['POST'])]
-  #[OA\Post(summary: 'Create a new bid', tags: ['Student Bidding'])]
-  public function __invoke(int $sessionId, CreateBidRequest $request, BidService $bidService): JsonResponse
-  {
-      $bidService->createBid($this->getStudent(), $sessionId, $request);
-      return new JsonResponse([], Response::HTTP_CREATED);
-  }
-  ```
-  
-  **Step 3: Domain Service**
-  ```php
-  // src/Domain/Bid/Service/BidService.php
-  public function createBid(Student $student, int $sessionId, CreateBidRequest $request): Bid
-  {
-      $session = $this->sessionRepository->find($sessionId);
-      $class = $this->classesRepository->find($request->classId);
-      $this->validateBid($student, $session, $class, $request->points);
-      
-      $bid = new Bid();
-      $bid->setStudent($student)->setSession($session)->setClass($class)->setPoints($request->points);
-      $this->bidRepository->save($bid, true);
-      return $bid;
-  }
-  ```
-  
-  ### Security Configuration
-  - `/api/webhook/*`: Basic auth (api_in_memory_users)
-  - `/api/*`: Bearer token (ApiTokenAuthenticator)
-  - Admin APIs require ROLE_ADMIN
-  - Student APIs require ROLE_USER
-  
-  ### Database Migrations
-  ```bash
-  bin/console make:migration          # Generate migration
-  bin/console doctrine:migrations:migrate   # Apply
-  bin/console doctrine:migrations:migrate prev  # Rollback
-  ```
-  
-  ### Doctrine Entity Pattern
-  ```php
-  #[ORM\Entity(repositoryClass: CampaignRepository::class)]
-  #[ORM\Table(name: 'campaign')]
-  #[ORM\HasLifecycleCallbacks]
-  class Campaign
-  {
-      #[ORM\Id]
-      #[ORM\GeneratedValue]
-      #[ORM\Column(type: 'integer')]
-      private ?int $id = null;
-  
-      #[ORM\Column(type: 'string', length: 255)]
-      private string $name;
-  
-      #[ORM\OneToMany(mappedBy: 'campaign', targetEntity: Session::class)]
-      private Collection $sessions;
-  
-      #[ORM\PrePersist]
-      public function onPrePersist(): void { $this->createdAt = new \DateTime(); }
-  }
-  ```
-  
-  ### DTO Transformers
-  ```php
-  // Entity to Response DTO
-  class BidResponseDtoTransformer
-  {
-      public function transformFromObject(Bid $bid): BidResponseDto
-      {
-          $dto = new BidResponseDto();
-          $dto->id = $bid->getId();
-          $dto->points = $bid->getPoints();
-          $dto->status = $bid->getStatus()->value;
-          return $dto;
-      }
-  }
-  ```
-  
-  ═══════════════════════════════════════════════════════════════════════════════
-  ## 4. FRONTEND APPLICATIONS
-  ═══════════════════════════════════════════════════════════════════════════════
-  
-  ### Common Technology Stack
-  - Next.js 14.2.x / React 18.x / TypeScript 5.x
-  - TailwindCSS 3.x + Material UI 5.x
-  - Formik + Yup (forms)
-  - Axios 1.8.x (API client)
-  - React Query (server state)
-  
-  ### bidding-admin (Admin Dashboard - Port 4007)
-  
-  **Features**: Campaign CRUD, Session management, Student management, 
-  Class/Course management, Simulation execution, User/role management
-  
-  **Structure**:
-  ```
-  bidding-admin/src/
-  ├── app/                    # Next.js App Router
-  │   ├── (auth)/            # Protected routes
-  │   │   ├── campaigns/     # Campaign management
-  │   │   ├── sessions/      # Session management
-  │   │   ├── students/      # Student management
-  │   │   ├── classes/       # Class management
-  │   │   └── simulations/   # Simulation pages
-  │   └── login/             # Public login
-  ├── components/            # React components
-  │   ├── campaign/          # CampaignForm, CampaignTable, PhaseConfig
-  │   ├── common/            # DataTable, Modal, Loader
-  │   └── forms/             # Form components
-  └── src/
-      ├── api/               # Axios config + endpoint files
-      ├── hooks/             # useCampaigns, useAuth
-      ├── stores/            # Zustand stores (authStore, uiStore)
-      ├── types/             # TypeScript interfaces
-      └── utils/             # date, validation utilities
-  ```
-  
-  ### bidding-web (Student Portal - Port 4006)
-  
-  **Features**: View sessions/courses, Submit bids, Add/drop courses,
-  Manage waitlists, View simulation results
-  
-  **Structure**:
-  ```
-  bidding-web/src/
-  ├── app/                    # Next.js App Router
-  │   ├── (auth)/            # Protected routes
-  │   │   ├── bidding/       # Bidding interface
-  │   │   ├── add-drop/      # Add-drop interface
-  │   │   ├── waitlist/      # Waitlist management
-  │   │   └── results/       # Results pages
-  │   └── login/             # SSO login
-  ├── components/            # React components
-  │   ├── bid/               # BidSheet, CourseCard, PointsAllocator
-  │   ├── course/            # Course display
-  │   └── common/            # Shared components
-  └── src/
-      ├── api/               # API client
-      ├── types/             # TypeScript types
-      └── utils/             # Utilities
-  ```
-  
-  ### State Management
-  
-  **React Query** (server state):
-  ```typescript
-  export function useCampaigns() {
-    return useQuery('campaigns', fetchCampaigns);
-  }
-  export function useCreateCampaign() {
-    return useMutation(createCampaign, {
-      onSuccess: () => queryClient.invalidateQueries('campaigns')
-    });
-  }
-  ```
-  
-  **Zustand** (client state - bidding-admin):
-  ```typescript
-  export const useAuthStore = create<AuthStore>((set) => ({
-    user: null,
-    token: null,
-    setAuth: (user, token) => set({ user, token }),
-    logout: () => set({ user: null, token: null }),
-  }));
-  ```
-  
-  ### API Client
-  ```typescript
-  // src/api/axios.ts
-  const api = axios.create({
-    baseURL: process.env.NEXT_PUBLIC_API_URL,
-    headers: { 'Content-Type': 'application/json' },
-  });
-  api.interceptors.request.use((config) => {
-    const token = Cookies.get('token');
-    if (token) config.headers.Authorization = `Bearer ${token}`;
-    return config;
-  });
-  ```
-  
-  ### TypeScript Types
-  ```typescript
-  export interface Campaign {
-    id: number;
-    name: string;
-    status: CampaignStatus;
-    startDate: string;
-    endDate: string;
-    phases: CampaignPhase[];
-    studentFilters: StudentFilter[];
-    courseFilters: CourseFilter[];
-  }
-  export enum CampaignStatus { DRAFT = 'draft', ACTIVE = 'active', COMPLETED = 'completed' }
-  ```
-  
-  ### Component Pattern
-  ```tsx
-  'use client';
-  import { useFormik } from 'formik';
-  import * as Yup from 'yup';
-  
-  export function CampaignForm({ campaign, onSubmit, isLoading }: CampaignFormProps) {
-    const formik = useFormik({
-      initialValues: { name: campaign?.name ?? '', startDate: '', endDate: '' },
-      validationSchema: Yup.object({
-        name: Yup.string().required('Name is required'),
-        endDate: Yup.date().min(Yup.ref('startDate'), 'End must be after start'),
-      }),
-      onSubmit,
-    });
-    return <form onSubmit={formik.handleSubmit}>{/* fields */}</form>;
-  }
-  ```
-  
-  ### Build Commands
-  ```bash
-  npm run start:dev    # Development
-  npm run build        # Production build
-  npm run build:int    # Integration
-  npm run build:uat    # UAT
-  npm run build:prd    # Production
-  ```
-  
-  ═══════════════════════════════════════════════════════════════════════════════
-  ## 5. DATABASE
-  ═══════════════════════════════════════════════════════════════════════════════
-  
-  ### Technology: MySQL 8.0 with Doctrine ORM
-  
-  ### Core Tables
-  
-  **campaign**
-  - id, name, description, status, start_date, end_date, created_at, updated_at
-  
-  **campaign_phase_config** (phases: Pre-Bidding, Bidding, Add-Drop)
-  - id, campaign_id, phase, start_date, end_date, is_active
-  
-  **campaign_student_filter** / **campaign_course_filter**
-  - id, campaign_id, filter_type, filter_value
-  
-  **session**
-  - id, campaign_id, name, type, phase, start_date, end_date, status, is_active
-  
-  **session_course**
-  - id, session_id, course_id, course_cut_off_price
-  
-  **student**
-  - id, people_soft_id (unique), email, first_name, last_name, promotion_id, status
-  
-  **student_data**
-  - id, student_id (unique), gpa, total_points, used_points
-  
-  **bid**
-  - id, student_id, session_id, class_id, points, status, type, rank
-  - UNIQUE KEY (student_id, session_id, class_id)
-  
-  **classes**
-  - id, course_id, campus_id, code, name, term, section, seats, instructor, schedule
-  
-  **class_promotions**
-  - id, class_id, promotion_id, promotion_seats
-  
-  **course**
-  - id, code (unique), title, description, credits, type, module_id
-  
-  **program** / **promotion** / **campus** / **module**
-  - Standard reference tables
-  
-  **simulation**
-  - id, session_id, status, started_at, completed_at, results (JSON)
-  
-  **exchange**
-  - id, student_id, session_id, p3/p4/p5_campus_id, gpa_score, essays_score, points
-  
-  ### Key Indexes
-  ```sql
-  CREATE INDEX idx_bid_student_session ON bid(student_id, session_id);
-  CREATE INDEX idx_bid_status ON bid(status);
-  CREATE INDEX idx_session_campaign ON session(campaign_id);
-  CREATE INDEX idx_classes_course ON classes(course_id);
-  CREATE INDEX idx_student_promotion ON student(promotion_id);
-  CREATE INDEX idx_campaign_status ON campaign(status);
-  ```
-  
-  ### Migration Example
-  ```php
-  final class Version20240101120000 extends AbstractMigration
-  {
-      public function up(Schema $schema): void {
-          $this->addSql('ALTER TABLE campaign ADD essay_deadline DATETIME DEFAULT NULL');
-      }
-      public function down(Schema $schema): void {
-          $this->addSql('ALTER TABLE campaign DROP essay_deadline');
-      }
-  }
-  ```
-  
-  ═══════════════════════════════════════════════════════════════════════════════
-  ## 6. API REFERENCE
-  ═══════════════════════════════════════════════════════════════════════════════
-  
-  ### Authentication
-  | Type    | Endpoint Pattern   | Auth Method   | Role Required         |
-  |---------|-------------------|---------------|----------------------|
-  | Admin   | /api/admin/*      | Bearer Token  | ROLE_ADMIN           |
-  | Student | /api/student/*    | Bearer Token  | ROLE_USER            |
-  | Webhook | /api/webhook/*    | Basic Auth    | ROLE_MULESOFT_WEBHOOK|
-  
-  ### Key Endpoints
-  
-  **Session Management**
-  - GET/POST/PUT /api/admin/session
-  - GET /api/student/session/active
-  
-  **Bidding**
-  - POST /api/student/bidding/{sessionId}/bid
-  - GET /api/student/bidding/{sessionId}/status
-  
-  **Add-Drop**
-  - POST /api/student/bidding/add-drop/{sessionId}
-  - GET /api/student/bidding/add-drop/{sessionId}/waitlist-classes
-  
-  **Campus Exchange**
-  - POST /api/student/campus-exchange/{sessionId}/bid
-  - POST /api/student/campus-exchange/add-drop/{sessionId}/allotment
-  
-  **Simulation**
-  - POST /api/admin/simulation/{sessionId}/run
-  - GET /api/student/simulation/{sessionId}/results
-  
-  ═══════════════════════════════════════════════════════════════════════════════
-  ## 7. CODING CONVENTIONS
-  ═══════════════════════════════════════════════════════════════════════════════
-  
-  ### PHP/Symfony (bidding-api)
-  - Use PHP 8.1+ attributes (not annotations)
-  - Follow PSR-12 coding standard
-  - Use constructor dependency injection
-  - Create DTOs for all API request/response
-  - Use Doctrine migrations for schema changes
-  - Write PHPUnit tests for services
-  - Use MicroMapper for entity-DTO transformations
-  
-  ### TypeScript/React (bidding-admin & bidding-web)
-  - Use TypeScript strict mode
-  - Use functional components with hooks
-  - Use React Query for server state
-  - Use Zustand for client state (bidding-admin)
-  - Follow ESLint + Prettier configuration
-  - Use conventional commits (commitlint)
-  
-  ═══════════════════════════════════════════════════════════════════════════════
-  ## 8. DEVELOPMENT WORKFLOW
-  ═══════════════════════════════════════════════════════════════════════════════
-  
-  ### Local Development
-  ```bash
-  # bidding-api
-  ./deploy/scripts/up-dev.sh
-  bin/console doctrine:migrations:migrate
-  # API Docs: https://bidding-dev.insead.edu/api/doc
-  
-  # bidding-admin (port 4007)
-  npm run start:dev
-  
-  # bidding-web (port 4006)
-  npm run start:dev
-  ```
-  
-  ### Testing
-  | Layer            | Tool              | Location                    |
-  |-----------------|-------------------|----------------------------|
-  | API Unit        | PHPUnit           | bidding-api/tests/         |
-  | API Integration | PHPUnit           | bidding-api/tests/         |
-  | Admin Components| Jest + RTL        | bidding-admin/__test__/    |
-  | Web Components  | Jest + RTL        | bidding-web/test/          |
-  | E2E             | Cypress           | bidding-admin/cypress/     |
-  
-  ### Environment Variables
-  ```bash
-  # bidding-api
-  APP_ENV=dev
-  DATABASE_URL=mysql://user:pass@localhost:3306/bidding
-  REDIS_URL=redis://localhost:6379
-  
-  # bidding-admin / bidding-web
-  NEXT_PUBLIC_API_URL=https://bidding-dev.insead.edu
-  ```
-  
-  ### Environments
-  | Environment | Purpose             | API URL                  |
-  |-------------|---------------------|--------------------------|
-  | DEV         | Local development   | bidding-dev.insead.edu   |
-  | INT         | Integration testing | bidding-int.insead.edu   |
-  | UAT         | User acceptance     | bidding-uat.insead.edu   |
-  | PROD        | Production          | bidding.insead.edu       |
-  
-  ═══════════════════════════════════════════════════════════════════════════════
-  ## 9. COMMON CHANGE PATTERNS
-  ═══════════════════════════════════════════════════════════════════════════════
-  
-  ### Adding a New Field to an Entity
-  1. Add property to Entity class
-  2. Create Doctrine migration
-  3. Add to Request/Response DTOs
-  4. Update API controller
-  5. Update admin UI forms/tables
-  6. Update student UI if applicable
-  7. Add tests
-  
-  ### Creating a New API Endpoint
-  1. Create Controller with Route attribute
-  2. Create Request DTO with validation
-  3. Create Response DTO transformer
-  4. Add to security firewall
-  5. Add OpenAPI documentation
-  6. Update frontend API client
-  7. Add integration tests
-  
-  ### Fixing a Bug
-  1. Identify affected components (API, Admin, Web)
-  2. Write failing test that reproduces bug
-  3. Implement fix
-  4. Verify all related tests pass
-  5. Test in development environment
-  6. Document any data migration needs
-  
-  ═══════════════════════════════════════════════════════════════════════════════
-  ## 10. IMPORTANT NOTES
-  ═══════════════════════════════════════════════════════════════════════════════
-  
-  1. **Database Changes**: Always create Doctrine migrations
-  2. **API Changes**: Update OpenAPI annotations and test with Postman
-  3. **Campaign Logic**: Campaign phases control feature visibility
-  4. **Student Filters**: Campaigns have student_filters and course_filters
-  5. **Simulation Dependencies**: Many features depend on simulation runs
-  6. **Multi-app Coordination**: Some features span all three apps
+  # INSEAD Bidding System
 
-# =============================================================================
-# Per-artifact Rules
-# =============================================================================
+  Course bidding platform for INSEAD business school. Brownfield monorepo with three apps sharing one API.
+
+  ## Architecture
+
+  ```
+  bidding-web (Student Portal, Next.js 14, port 4006)
+  bidding-admin (Admin Dashboard, Next.js 14, port 4007)
+       │                  │
+       └──────┬───────────┘
+              ▼
+  bidding-api (Symfony 6.4, PHP 8.1+)
+       │          │          │
+    MySQL 8    Redis 6    SSO/SAML+Azure OAuth
+  ```
+
+  External integrations: MuleSoft webhooks (/api/webhook/*), PeopleSoft GPA endpoint, AWS S3 (flex-switch files).
+
+  ## Domain Model
+
+  Core flow: Program → Promotion → Student → Bid → Class → Course → Module
+  Campaign orchestration: Campaign → CampaignPhaseConfig → CampaignModule → Session → Simulation
+
+  Key entities (bidding-api/src/Entity/):
+  - Campaign: has session, preset, program, promotion, phases, modules, capital/credit rules
+  - CampaignPhaseConfig: phase timing per campaign
+  - CampaignModule: module-level config (core/elective, capital rules)
+  - Session: belongs_to Campaign, has type (SessionType), status (SessionStatus), phase (SessionPhase)
+  - Bid: belongs_to Student+Campaign+CampaignPhaseConfig+CampaignModule+Classes, has points, status (BidStatus), type (BidType), isFree flag, coursePackStatus
+  - Student: people_soft_id (unique), belongs_to Promotion, has StudentData (points/credits)
+  - Classes: course sections with seats, belongs_to Course+Campus, has ClassPromotions
+  - Course: code (unique), title, credits, belongs_to Module, has CourseType
+  - Simulation/SimulationRun/SimulationClassDemand: bid allocation engine
+  - Exchange: cross-campus data (p3/p4/p5 campus, gpa_score, essays_score)
+  - Adjustment/AdjustmentCourse/AdjustmentType: post-simulation adjustments
+  - FlexSwitch*/: course switch requests with file uploads and approvals
+  - Group/GroupMember/GroupSimulation: group bidding support
+  - Notification/NotificationBatch/NotificationTemplate/NotificationSetting: email/notification system
+  - Preset/PresetModule: reusable campaign templates
+  - Order/OrderCoursePack: course pack ordering
+  - PolicyAcceptance/UserPolicyAcceptance: policy compliance tracking
+  - FeatureAccess: feature flag management
+  - AuditLog/CampaignAuditLog/ApiLogs: audit trail
+
+  Status enums are separate entities (BidStatus, SessionStatus, ClassStatus, etc.), not PHP enums.
+
+  ## Backend (bidding-api)
+
+  Request flow: HTTP → Controller → (Request DTO via DtoArgumentResolver) → Domain Service → Repository → Response DTO → JSON
+
+  Directory structure:
+  ```
+  src/
+  ├── Controller/Api/
+  │   ├── Admin/SimulationDashboardController
+  │   ├── Student/  (Bidding/, CampusExchange/, Campaign/, Class/, Dashboard/, FlexSwitch/, Waitlist/, Promotion/, Rule/)
+  │   └── Webhook/  (Class/, Course/, Enrollment/, Student/)
+  ├── Domain/       (Adjustment/, AdminUser/, AuditLog/, Backup/, Bid/, Campaign/, Campus/, Class/, Course/, Dashboard/, Exchange/, FeatureAccess/, FlexSwitch/, JobQueue/, Notification/, Permission/, Program/, Promotion/, Query/, Role/, Session/, Simulation/, Student/, Theme/, User/, UserToken/)
+  ├── Dto/Request/  (DtoInterface, Transformer/)
+  ├── Dto/Response/ (Transformer/)
+  ├── Entity/       (90+ entities, Traits/)
+  ├── Flow/         (AbstractFlow, BiddingFlow, CampusExchangeFlow, ElectiveAddDropFlow, Context/, Result/)
+  ├── Module/       (Setup/, Bidding/, Simulation/, AddDrop/, CampusExchange/, Waitlist/)
+  ├── Event/        (WaitListPostEvent)
+  ├── EventListener/, EventSubscriber/
+  ├── Message/, MessageHandler/  (async messaging)
+  ├── Repository/, Security/, Service/, Store/
+  ├── Helper/, Logger/, Monolog/, Pagination/, Serializer/, Exception/
+  └── DataFixtures/, Doctrine/, DtoArgumentResolver/
+  ```
+
+  Flow/Module pattern for complex operations:
+  - BiddingFlow: Setup → Bidding → Simulation → AddDrop → Waitlist
+  - CampusExchangeFlow: for exchange student bidding
+  - ElectiveAddDropFlow: for post-simulation add/drop
+  - FlowContext carries data between modules
+  - Each Module implements ModuleInterface with execute(FlowContext)
+
+  Security: ApiTokenAuthenticator (Bearer), ApiUserAuthenticator, AzureOAuthAuthenticator, SAML auth
+  - /api/webhook/*: Basic auth; /api/*: Bearer token
+  - Voter-based authorization in Security/Voter/
+
+  Testing: PHPUnit in tests/Unit/ (Controller/, Domain/)
+
+  ## Frontend - bidding-admin
+
+  Structure: src/app/(authenticated)/ routes: campaign/, campuses/, course-list/, dashboard/, entry/, flex-switch/, integration/, mba/, monitoring-analytics/, notification-centre/, preset/, programme/, students/, user-management/
+  API layer: src/src/ with domain folders (bid/, bidding/, campaign-management/, session/, simulation/, student/, class/, course/, exchange/, flex-switch/, notification/, preset/, promotion/, programme-management/, role-management/, user-management/, admin-user/, adjustment/, backup/, campus/, dashboard/, monitoring-analytics/, theme-management/)
+  Each domain folder typically has: api service, hooks (React Query), types
+  State: Zustand stores for client state, React Query for server state
+  Forms: Formik + Yup validation
+  UI: TailwindCSS + Material UI 5.x
+  Auth: SSO token service, session context
+
+  ## Frontend - bidding-web
+
+  Feature-based architecture in src/features/:
+  - auth/ (SSO login, components/, hooks/, services/, types/)
+  - bidding/ (components/, constants/, hooks/, pages/, types/, utils/)
+  - courses/, dashboard/, notification/, profile/, switch/
+  Bidding types: CampaignBiddingResponse, FormValues (capital_granted/spent/left, credits, primary_course/backup_course), BiddingConfig, PrimaryBids, AvailableCourse
+  API: Axios client in src/lib/api/ (client-browser.ts, client-server.ts, interceptors, mutations/, queries/, services/)
+  UI: Ant Design (antd-provider), TailwindCSS, custom Card/Modal/Table/ErrorBoundary components
+  State: React Query (query-provider), user context (user-provider), notification context
+  Hooks: use-bidding-form, use-bidding-courses, use-course-conflicts, use-add-drop-waitlist-form, use-pre-bidding-form
+
+  ## Key Business Rules
+
+  1. Capital (points) allocation: Students get capital per campaign, distributed across bids per module
+  2. Campaign has minCapitalGranted/maxCapitalGranted and minCreditsToFulfill/maxCreditsToFulfill
+  3. Bids have primary and backup types; backup_size is configurable per campaign
+  4. Enrollment priority: bid_points + gpa_score + essay_score; ties by timestamp
+  5. Campaign phases: defined via CampaignPhaseConfig, control what actions students can take
+  6. Simulation runs calculate cutoff prices and allocate students to classes
+  7. Waitlist: auto-promotion when seats open, priority by bid points
+  8. Flex Switch: course switch requests with file upload, approval workflow
+  9. Group bidding: students bid as groups with shared simulation
+  10. Course packs: bundled course ordering system
+
+  ## Conventions
+
+  PHP/Symfony:
+  - PHP 8.1+ attributes (not annotations) for ORM mappings and routes
+  - PSR-12 coding standard
+  - Constructor dependency injection (autowire: true in services.yaml)
+  - Request DTOs implement DtoInterface, resolved by DtoArgumentResolver
+  - Response DTOs use Transformer/ classes for entity-to-DTO conversion
+  - Doctrine migrations in migrations/ (bin/console make:migration)
+  - OpenAPI docs via NelmioApiDocBundle (#[OA\...] attributes)
+  - One controller per action pattern (single __invoke method)
+
+  TypeScript/React:
+  - TypeScript strict mode, Next.js App Router ('use client' for interactive components)
+  - React Query for server state (queries/mutations), Zustand for client state (bidding-admin)
+  - Formik + Yup for forms (bidding-admin), custom hooks for forms (bidding-web)
+  - ESLint + Prettier, conventional commits (commitlint)
+  - Feature-based folder structure in bidding-web
+  - Domain-based folder structure in bidding-admin/src/src/
+
+  ## Development
+
+  ```
+  bidding-api:   ./deploy/scripts/up-dev.sh && bin/console doctrine:migrations:migrate
+  bidding-admin: npm run start:dev (port 4007)
+  bidding-web:   npm run start:dev (port 4006)
+  ```
+
+  Environments: DEV (bidding-dev.insead.edu), INT (bidding-int.insead.edu), UAT (bidding-uat.insead.edu), PROD (bidding.insead.edu)
+  Build variants: npm run build:{int,uat,prd}
+  API docs: /api/doc (NelmioApiDocBundle)
+
+  ## Change Patterns
+
+  Adding a field: Entity property → migration → Request/Response DTO + Transformer → Controller → admin UI → web UI → tests
+  New API endpoint: Controller (Route attribute, OA annotations) → Request DTO (DtoInterface) → Domain Service → Response DTO Transformer → Security voter if needed → frontend API client → tests
+  New feature: Often spans all 3 apps; start with API, then admin, then web
+  Bug fix: Identify affected app(s) → write failing test → fix → verify across apps
+  Database change: ALWAYS create Doctrine migration, never manual SQL
+
 rules:
   proposal:
-    - Keep proposals focused on a single feature or fix
-    - Include impact analysis for all three apps (api, admin, web)
-    - Identify which entities and services are affected
-    - Note any migration requirements
-    - Consider backward compatibility
-  
+    - Keep focused on a single feature or fix
+    - Identify which apps are affected (api, admin, web) and their specific impact
+    - List affected entities, domain services, and controllers by name
+    - Note migration requirements (new columns, tables, indexes)
+    - Consider backward compatibility with existing campaigns/sessions in progress
+    - Identify if Flow/Module architecture applies (complex multi-step operations)
+
   specs:
-    - Define clear acceptance criteria
-    - Include API endpoint specifications when applicable
-    - Specify validation rules for inputs
-    - Consider edge cases for bidding scenarios
-    - Document impact on existing sessions/campaigns
-  
+    - Use Given/When/Then format for scenarios
+    - Include API endpoint specs (method, path, request/response shape) when applicable
+    - Specify validation rules matching existing DtoInterface patterns
+    - Cover edge cases: active campaigns, in-progress simulations, concurrent bids
+    - Reference existing similar behavior before defining new patterns
+    - Document impact on existing sessions/campaigns data
+
   design:
-    - Follow existing architecture patterns (Flow/Module for complex operations)
-    - Use DTO pattern for all API changes
-    - Consider database query optimization
-    - Plan for backward compatibility with existing data
-    - Include database migration strategy if schema changes
-    - Reference existing similar implementations
-  
+    - Follow existing patterns: check similar implementations in the codebase first
+    - Use Flow/Module pattern for complex multi-step operations
+    - Use DTO pattern (DtoInterface + DtoArgumentResolver) for all API request/response
+    - Plan Doctrine migration strategy (up and down methods)
+    - Consider query optimization (indexes, eager/lazy loading, DQL)
+    - Plan backward compatibility with existing data
+    - Specify file locations using actual project paths
+    - Note if Transformer classes need updates for DTO changes
+
   tasks:
-    - Group tasks by app (api → admin → web)
-    - Keep individual tasks under 2 hours
-    - Include migration tasks before feature tasks
-    - Add testing tasks for each app
-    - Consider deployment order dependencies
-    - Mark tasks that require environment-specific testing
+    - Order by dependency: migration → API entities/services → API controllers → admin UI → web UI → tests
+    - Keep individual tasks completable in one session (under 2 hours)
+    - Include specific file paths (e.g., src/Entity/Campaign.php, src/Domain/Bid/Service/)
+    - Add PHPUnit test tasks for API changes (tests/Unit/)
+    - Add Jest test tasks for frontend changes
+    - Mark cross-app dependencies explicitly
+    - Include migration task as first task when schema changes are needed
