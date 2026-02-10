@@ -43,6 +43,32 @@ Any campaign in Draft status SHALL report `is_active = 'CLOSE'` for all modules 
 - **WHEN** the API returns module data for a campaign that is NOT in Draft status
 - **THEN** module `is_active` SHALL continue to be computed based on date ranges as before
 
+### Requirement: Auto-transition campaign from draft to open when PM starts a module
+When a PM opens any module phase via `PUT /dashboard/campaign/status` (`CampaignPhaseService::activatePhase()`), and the campaign is in `draft` status, the campaign status SHALL automatically transition to `open`.
+
+#### Scenario: PM opens first module on a draft campaign
+- **WHEN** the PM calls `activatePhase` with `status = 'open'` for a phase config
+- **AND** the campaign is in `draft` status
+- **THEN** the campaign status SHALL be set to `open`
+- **AND** the phase `startDate` SHALL be set to now
+- **AND** the API response for modules SHALL reflect the newly opened phase as `is_active = 'OPEN'` (since the campaign is no longer draft)
+
+#### Scenario: PM opens module on an already-open campaign
+- **WHEN** the PM calls `activatePhase` with `status = 'open'` for a phase config
+- **AND** the campaign is already in `open` status
+- **THEN** the campaign status SHALL remain `open` (no change)
+- **AND** the phase SHALL be activated normally
+
+#### Scenario: PM opens module on a closed campaign
+- **WHEN** the PM calls `activatePhase` with `status = 'open'` for a phase config
+- **AND** the campaign is in `close` status
+- **THEN** the campaign status SHALL NOT be changed (remains `close`)
+- **AND** the phase SHALL be activated normally
+
+#### Scenario: PM closes a module (does not affect campaign status)
+- **WHEN** the PM calls `activatePhase` with `status = 'close'` for a phase config
+- **THEN** the campaign status SHALL NOT change regardless of the campaign's current status
+
 ### Requirement: Campaign status transition resets module display
 When a campaign transitions to Draft status, the module status display SHALL immediately reflect CLOSE for all modules without requiring manual intervention.
 
