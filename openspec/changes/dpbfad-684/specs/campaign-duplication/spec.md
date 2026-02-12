@@ -24,3 +24,24 @@ The system SHALL only duplicate course-related data (`courseSelection` JSON, `Ca
 #### Scenario: Other duplication flags remain unaffected
 - **WHEN** a PM duplicates a campaign with any combination of `duplicateCampaignFlow` and `duplicateBiddingRounds` flags
 - **THEN** campaign flow and bidding round duplication behavior SHALL remain unchanged from current behavior
+
+### Requirement: campaign_executions FK references correct table
+The `campaign_executions` table SHALL have a foreign key on `campaign_module_id` that references `campaign_modules(id)`. Any stale foreign key referencing `preset_modules(id)` SHALL be removed, regardless of whether metadata shows it on the new or old column name.
+
+#### Scenario: Creating a CampaignExecution with a valid campaign_module_id
+- **WHEN** a `CampaignExecution` is created via duplication, preset deployment, or phase configuration
+- **AND** the `campaign_module_id` references a valid row in `campaign_modules`
+- **THEN** the insert SHALL succeed without integrity constraint violations
+
+#### Scenario: Migration drops stale FK (Standard Case)
+- **WHEN** migration `Version20260211000000` is executed on a standard system
+- **AND** the stale FK `campaign_executions_ibfk_2` is visible on `campaign_module_id`
+- **THEN** the stale FK SHALL be dropped
+- **THEN** the correct FK `fk_campaign_executions_campaign_module` SHALL exist
+
+#### Scenario: Migration drops stale FK (Inconsistent Metadata / MySQL 5.7)
+- **WHEN** migration `Version20260211000000` is executed on a system with stale metadata
+- **AND** the stale FK `campaign_executions_ibfk_2` is visible on the OLD column name `preset_module_id` (or only via constraint name)
+- **THEN** the migration SHALL detect the FK via alternate checks
+- **THEN** the stale FK SHALL be dropped
+- **THEN** the correct FK `fk_campaign_executions_campaign_module` SHALL exist
