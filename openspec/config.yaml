@@ -1,206 +1,422 @@
 schema: spec-driven
 
 # =============================================================================
-# INSEAD Bidding System - OpenSpec Configuration
+# INSEAD Bidding System - OpenSpec Configuration (Brownfield)
 # =============================================================================
-# Brownfield project context for AI assistants.
-# Context is injected into ALL artifact prompts.
-# Rules are injected only into their matching artifact.
+# Optimized for safe feature development and bug fixing on a live production
+# system. Context is injected into ALL artifact prompts. Rules are injected
+# only into their matching artifact type.
 # =============================================================================
 
 context: |
-  # INSEAD Bidding System
+  # INSEAD Bidding System — Brownfield Context
 
-  Course bidding platform for INSEAD business school. Brownfield monorepo with three apps sharing one API.
+  This is a **live production system** used by INSEAD business school for course bidding.
+  Any change MUST preserve backward compatibility with in-flight campaigns, active sessions,
+  and existing student data. There are no greenfield assumptions — everything already works;
+  we're evolving it safely.
 
-  ## Architecture
+  ## Monorepo Layout
 
   ```
-  bidding-web (Student Portal, Next.js 14, port 4006)
-  bidding-admin (Admin Dashboard, Next.js 14, port 4007)
-       │                  │
-       └──────┬───────────┘
-              ▼
-  bidding-api (Symfony 6.4, PHP 8.1+)
-       │          │          │
-    MySQL 8    Redis 6    SSO/SAML+Azure OAuth
+  insead/
+  ├── bidding-api/      Symfony 6.4 · PHP 8.1+ · MySQL 8 · Redis 6 · Port 8000
+  ├── bidding-admin/    Next.js 14 · Admin dashboard · Port 4007
+  ├── bidding-web/      Next.js 14 · Student portal  · Port 4006
+  └── openspec/         Specs, changes, config
   ```
 
-  External integrations: MuleSoft webhooks (/api/webhook/*), PeopleSoft GPA endpoint, AWS S3 (flex-switch files).
+  ## Architecture Overview
 
-  ## Domain Model
-
-  Core flow: Program → Promotion → Student → Bid → Class → Course → Module
-  Campaign orchestration: Campaign → CampaignPhaseConfig → CampaignModule → Session → Simulation
-
-  Key entities (bidding-api/src/Entity/):
-  - Campaign: has session, preset, program, promotion, phases, modules, capital/credit rules
-  - CampaignPhaseConfig: phase timing per campaign
-  - CampaignModule: module-level config (core/elective, capital rules)
-  - Session: belongs_to Campaign, has type (SessionType), status (SessionStatus), phase (SessionPhase)
-  - Bid: belongs_to Student+Campaign+CampaignPhaseConfig+CampaignModule+Classes, has points, status (BidStatus), type (BidType), isFree flag, coursePackStatus
-  - Student: people_soft_id (unique), belongs_to Promotion, has StudentData (points/credits)
-  - Classes: course sections with seats, belongs_to Course+Campus, has ClassPromotions
-  - Course: code (unique), title, credits, belongs_to Module, has CourseType
-  - Simulation/SimulationRun/SimulationClassDemand: bid allocation engine
-  - Exchange: cross-campus data (p3/p4/p5 campus, gpa_score, essays_score)
-  - Adjustment/AdjustmentCourse/AdjustmentType: post-simulation adjustments
-  - FlexSwitch*/: course switch requests with file uploads and approvals
-  - Group/GroupMember/GroupSimulation: group bidding support
-  - Notification/NotificationBatch/NotificationTemplate/NotificationSetting: email/notification system
-  - Preset/PresetModule: reusable campaign templates
-  - Order/OrderCoursePack: course pack ordering
-  - PolicyAcceptance/UserPolicyAcceptance: policy compliance tracking
-  - FeatureAccess: feature flag management
-  - AuditLog/CampaignAuditLog/ApiLogs: audit trail
-
-  Status enums are separate entities (BidStatus, SessionStatus, ClassStatus, etc.), not PHP enums.
-
-  ## Backend (bidding-api)
-
-  Request flow: HTTP → Controller → (Request DTO via DtoArgumentResolver) → Domain Service → Repository → Response DTO → JSON
-
-  Directory structure:
   ```
-  src/
-  ├── Controller/Api/
-  │   ├── Admin/SimulationDashboardController
-  │   ├── Student/  (Bidding/, CampusExchange/, Campaign/, Class/, Dashboard/, FlexSwitch/, Waitlist/, Promotion/, Rule/)
-  │   └── Webhook/  (Class/, Course/, Enrollment/, Student/)
-  ├── Domain/       (Adjustment/, AdminUser/, AuditLog/, Backup/, Bid/, Campaign/, Campus/, Class/, Course/, Dashboard/, Exchange/, FeatureAccess/, FlexSwitch/, JobQueue/, Notification/, Permission/, Program/, Promotion/, Query/, Role/, Session/, Simulation/, Student/, Theme/, User/, UserToken/)
-  ├── Dto/Request/  (DtoInterface, Transformer/)
-  ├── Dto/Response/ (Transformer/)
-  ├── Entity/       (90+ entities, Traits/)
-  ├── Flow/         (AbstractFlow, BiddingFlow, CampusExchangeFlow, ElectiveAddDropFlow, Context/, Result/)
-  ├── Module/       (Setup/, Bidding/, Simulation/, AddDrop/, CampusExchange/, Waitlist/)
-  ├── Event/        (WaitListPostEvent)
-  ├── EventListener/, EventSubscriber/
-  ├── Message/, MessageHandler/  (async messaging)
-  ├── Repository/, Security/, Service/, Store/
-  ├── Helper/, Logger/, Monolog/, Pagination/, Serializer/, Exception/
-  └── DataFixtures/, Doctrine/, DtoArgumentResolver/
+  bidding-web (Student Portal)     bidding-admin (Admin Dashboard)
+       │                                │
+       └────────────┬───────────────────┘
+                    ▼
+           bidding-api (REST API)
+            │       │       │        │
+         MySQL 8  Redis 6  S3  SSO/SAML+OAuth
   ```
 
-  Flow/Module pattern for complex operations:
-  - BiddingFlow: Setup → Bidding → Simulation → AddDrop → Waitlist
-  - CampusExchangeFlow: for exchange student bidding
-  - ElectiveAddDropFlow: for post-simulation add/drop
-  - FlowContext carries data between modules
-  - Each Module implements ModuleInterface with execute(FlowContext)
+  External integrations:
+  - MuleSoft webhooks: `/api/webhook/{class,course,enrollment,student}/*`
+  - PeopleSoft: GPA endpoint (GpaService)
+  - AWS S3: Flex-switch file uploads
+  - Azure OAuth + SAML SSO: Dual auth support
 
-  Security: ApiTokenAuthenticator (Bearer), ApiUserAuthenticator, AzureOAuthAuthenticator, SAML auth
-  - /api/webhook/*: Basic auth; /api/*: Bearer token
-  - Voter-based authorization in Security/Voter/
+  ## Domain Model (Core Business Concepts)
 
-  Testing: PHPUnit in tests/Unit/ (Controller/, Domain/)
+  **Primary flow:**
+  Program → Promotion → Student → Bid → Class → Course → Module
 
-  ## Frontend - bidding-admin
+  **Campaign orchestration:**
+  Campaign → CampaignPhaseConfig → CampaignModule → Session → Simulation → SimulationRun
 
-  Structure: src/app/(authenticated)/ routes: campaign/, campuses/, course-list/, dashboard/, entry/, flex-switch/, integration/, mba/, monitoring-analytics/, notification-centre/, preset/, programme/, students/, user-management/
-  API layer: src/src/ with domain folders (bid/, bidding/, campaign-management/, session/, simulation/, student/, class/, course/, exchange/, flex-switch/, notification/, preset/, promotion/, programme-management/, role-management/, user-management/, admin-user/, adjustment/, backup/, campus/, dashboard/, monitoring-analytics/, theme-management/)
-  Each domain folder typically has: api service, hooks (React Query), types
-  State: Zustand stores for client state, React Query for server state
-  Forms: Formik + Yup validation
-  UI: TailwindCSS + Material UI 5.x
-  Auth: SSO token service, session context
+  **Key entity relationships (bidding-api/src/Entity/):**
+  | Entity | Key Fields | Relationships |
+  |--------|-----------|---------------|
+  | Campaign | phases, capital rules, credits | → Program, Promotion, Preset, CampaignModule[], CampaignPhaseConfig[], Session |
+  | CampaignModule | core/elective, capital rules | → Campaign, Module, PresetModule? |
+  | CampaignPhaseConfig | phase timing, dates | → Campaign |
+  | Session | type, status, phase | → Campaign |
+  | Bid | points, status, type, isFree | → Student, Campaign, CampaignPhaseConfig, CampaignModule, Classes |
+  | Student | people_soft_id (unique) | → Promotion, StudentData, Exchange |
+  | Classes | seats, section | → Course, Campus, ClassPromotions[] |
+  | Course | code (unique), title, credits | → Module, CourseType |
+  | Module | ModuleVariant[] | → Course[] |
+  | Simulation/SimulationRun | allocation engine | → Session, SimulationClassDemand[] |
+  | Exchange | campus, gpa/essay scores | → Student |
+  | Preset/PresetModule | reusable templates | → Campaign[] |
 
-  ## Frontend - bidding-web
+  **Supporting entities:**
+  - Adjustment/AdjustmentCourse/AdjustmentType — post-simulation corrections
+  - FlexSwitchRequest/FlexSwitchFile/FlexSwitchConfiguration — course switch workflow
+  - Group/GroupMember/GroupSimulation — group bidding
+  - Notification/NotificationBatch/NotificationTemplate/NotificationSetting/NotificationType — notifications
+  - Order/OrderCoursePack/OrderStatus — course pack ordering
+  - PolicyAcceptance/UserPolicyAcceptance — compliance
+  - FeatureAccess — feature flags
+  - AuditLog/CampaignAuditLog/ApiLogs — audit trail
+  - Printshop/PrintshopReturn — printshop management
+  - Project/ProjectMember — project management
+  - PromotionSetting/PromotionPeriod — promotion configuration
+  - CourseRanking — course ranking data
+  - SessionCourse — session-course mapping
 
-  Feature-based architecture in src/features/:
-  - auth/ (SSO login, components/, hooks/, services/, types/)
-  - bidding/ (components/, constants/, hooks/, pages/, types/, utils/)
-  - courses/, dashboard/, notification/, profile/, switch/
-  Bidding types: CampaignBiddingResponse, FormValues (capital_granted/spent/left, credits, primary_course/backup_course), BiddingConfig, PrimaryBids, AvailableCourse
-  API: Axios client in src/lib/api/ (client-browser.ts, client-server.ts, interceptors, mutations/, queries/, services/)
-  UI: Ant Design (antd-provider), TailwindCSS, custom Card/Modal/Table/ErrorBoundary components
-  State: React Query (query-provider), user context (user-provider), notification context
-  Hooks: use-bidding-form, use-bidding-courses, use-course-conflicts, use-add-drop-waitlist-form, use-pre-bidding-form
+  **Status types are separate database entities** (BidStatus, SessionStatus, ClassStatus,
+  CoursePackStatus, ClassWaitlistStatus, etc.), NOT PHP enums. Reference them via repository lookups.
+
+  ## Backend — bidding-api
+
+  **Request lifecycle:**
+  ```
+  HTTP Request
+    → Security (ApiTokenAuthenticator / AzureOAuthAuthenticator / SAML)
+    → Controller (PHP 8.1 Route/OA attributes)
+    → Request DTO (DtoInterface + DtoArgumentResolver)
+    → Domain Service (business logic)
+    → Repository (Doctrine ORM)
+    → Response DTO (Transformer classes)
+    → JSON Response
+  ```
+
+  **Directory structure:**
+  ```
+  bidding-api/src/
+  ├── Controller/
+  │   ├── Api/
+  │   │   ├── Admin/           # Admin-only endpoints
+  │   │   ├── Student/         # Student-facing endpoints
+  │   │   │   ├── Bidding/     # Bid CRUD, capital, credits
+  │   │   │   ├── Campaign/    # Active campaigns for student
+  │   │   │   ├── CampusExchange/  # Exchange bidding
+  │   │   │   ├── Class/       # Class info for students
+  │   │   │   ├── Dashboard/   # Student dashboard
+  │   │   │   ├── FlexSwitch/  # Switch requests
+  │   │   │   ├── Promotion/   # Promotion info
+  │   │   │   ├── Rule/        # Bidding rules
+  │   │   │   └── Waitlist/    # Waitlist management
+  │   │   ├── Webhook/         # MuleSoft inbound
+  │   │   │   ├── Class/       # Class sync
+  │   │   │   ├── Course/      # Course sync
+  │   │   │   ├── Enrollment/  # Enrollment sync
+  │   │   │   └── Student/     # Student sync
+  │   │   ├── Campaign/        # Campaign management (28 controllers)
+  │   │   ├── Session/         # Session management (11 controllers)
+  │   │   ├── Simulation/      # Simulation management (13 controllers)
+  │   │   ├── Preset/          # Preset management (15 controllers)
+  │   │   ├── Class/           # Class management (22 controllers)
+  │   │   ├── Course/          # Course management (11 controllers)
+  │   │   ├── Notification/    # Notification management (5 controllers)
+  │   │   ├── Exchange/        # Exchange management (10 controllers)
+  │   │   └── ...              # AdminUser, AuditLog, Bid, Program, Promotion, Role, Theme, etc.
+  │   ├── AzureOAuthController.php
+  │   └── SecurityController.php
+  ├── Domain/                  # Business logic services + repositories
+  │   ├── Campaign/            # 78 files — campaign services, validators, queries
+  │   ├── Student/             # 100 files — student services, data management
+  │   ├── Simulation/          # 48 files — simulation engine
+  │   ├── Session/             # 35 files — session lifecycle
+  │   ├── Class/               # 29 files — class management
+  │   ├── Bid/                 # 15 files — bid processing
+  │   ├── Dashboard/           # 28 files — dashboard data
+  │   ├── Promotion/           # 23 files — promotion management
+  │   ├── Course/              # 17 files — course management
+  │   ├── FlexSwitch/          # 18 files — flex switch workflow
+  │   ├── Adjustment/          # 11 files — adjustments
+  │   ├── Exchange/            # 8 files — campus exchange
+  │   ├── Query/               # 11 files — complex DQL queries
+  │   ├── Role/                # 10 files — role management
+  │   └── ...                  # AuditLog, Backup, Campus, FeatureAccess, JobQueue, Notification, etc.
+  ├── Dto/
+  │   ├── Request/             # DtoInterface implementations + Transformer/
+  │   └── Response/            # Response DTOs + Transformer/
+  ├── Entity/                  # 90+ Doctrine entities + Traits/
+  ├── Flow/                    # Multi-step operation orchestration
+  │   ├── AbstractFlow.php     # Base flow class
+  │   ├── BiddingFlow.php      # Setup → Bidding → Simulation → AddDrop → Waitlist
+  │   ├── CampusExchangeFlow.php  # Exchange student bidding
+  │   ├── ElectiveAddDropFlow.php  # Post-simulation add/drop
+  │   ├── Context/             # FlowContext — data carrier between modules
+  │   └── Result/              # Flow result types
+  ├── Module/                  # Flow module implementations
+  │   ├── Setup/               # Campaign setup module
+  │   ├── Bidding/             # Bid processing module
+  │   ├── Simulation/          # Simulation module
+  │   ├── AddDrop/             # Add/drop module
+  │   ├── CampusExchange/      # Exchange module
+  │   └── Waitlist/            # Waitlist module
+  ├── Security/
+  │   ├── ApiTokenAuthenticator.php    # Bearer token auth
+  │   ├── ApiUserAuthenticator.php     # API user auth
+  │   ├── AzureOAuthAuthenticator.php  # Azure OAuth
+  │   ├── Voter/               # Authorization voters
+  │   │   ├── FeatureAccessVoter.php
+  │   │   ├── StudentSessionAccessVoter.php
+  │   │   └── SwitchToStudentVoter.php
+  │   └── User/                # User providers
+  ├── Service/                 # Application-level services
+  │   ├── SimulationRunService.php        # Core simulation runner (large, 49KB)
+  │   ├── SimulationAlgorithmService.php  # Allocation algorithm
+  │   ├── SimulationSummaryService.php    # Summary calculations
+  │   ├── FlexSwitchApprovalService.php   # Approval workflow
+  │   ├── AzureService.php                # Azure integration
+  │   ├── GpaService.php                  # PeopleSoft GPA
+  │   ├── DatabaseBackupService.php       # Backup operations
+  │   ├── Import/                         # Data import services
+  │   └── ...
+  ├── Repository/              # 94 Doctrine repositories (one per entity)
+  ├── Command/                 # Symfony console commands (8)
+  ├── Message/MessageHandler/  # Async messaging (6 message types)
+  ├── EventListener/EventSubscriber/  # Event handling (13 subscribers)
+  ├── Helper/                  # Utility helpers (5)
+  ├── Pagination/              # Pagination utilities (2)
+  ├── DtoArgumentResolver/     # Resolves request DTOs from HTTP requests
+  └── migrations/              # Doctrine migrations (sequential)
+  ```
+
+  **Key patterns:**
+  - One controller per action (single `__invoke` method) for most endpoints
+  - DtoInterface + DtoArgumentResolver for request validation/hydration
+  - Response Transformers (Dto/Response/Transformer/) for entity → DTO conversion
+  - Flow/Module pattern for complex multi-step operations (bidding lifecycle)
+  - Domain services hold business logic; repositories handle persistence
+  - Constructor injection (autowire: true in services.yaml)
+  - PHP 8.1 attributes for ORM mappings (`#[ORM\...]`) and routes (`#[Route(...)]`)
+  - OpenAPI docs via NelmioApiDocBundle (`#[OA\...]` attributes)
+  - PSR-12 coding standard
+
+  **Auth & security:**
+  - `/api/webhook/*` → Basic auth (ApiUserAuthenticator)
+  - `/api/*` → Bearer token (ApiTokenAuthenticator)
+  - Admin/Student UI → Azure OAuth + SAML SSO
+  - Voter-based authorization for feature access and student session access
+
+  **Testing:**
+  - PHPUnit tests in `tests/Unit/{Controller/, Domain/}`
+  - Follows arrange-act-assert pattern
+  - Mock repositories and services
+
+  ## Frontend — bidding-admin (Admin Dashboard)
+
+  **Route structure** (`src/app/(authenticated)/`):
+  campaign/, campuses/, course-list/, dashboard/, entry/, flex-switch/,
+  integration/, mba/ (64 files — the main admin section), monitoring-analytics/,
+  notification-centre/, preset/, programme/, students/, user-management/
+
+  **API layer** (`src/src/` — domain-based folders):
+  Each domain folder has: api service, React Query hooks, TypeScript types
+  Domains: adjustment, admin-user, backup, bid, bidding, campaign-management,
+  campus, class, config, course, dashboard, exchange, flex-switch, helpers,
+  interfaces, monitoring-analytics, notification, preset, programme-management,
+  promotion, role-management, session, simulation, sso, student,
+  theme-management, user, user-management, utils
+
+  **Tech stack:**
+  - Next.js 14 App Router (`'use client'` for interactive components)
+  - React Query for server state, Zustand for client state
+  - Formik + Yup for form validation
+  - TailwindCSS + Material UI 5.x for styling
+  - SSO token service for authentication (src/sso-token-services.ts)
+
+  ## Frontend — bidding-web (Student Portal)
+
+  **Feature-based architecture** (`src/features/`):
+  - auth/ — SSO login (components/, hooks/, services/, types/)
+  - bidding/ — Main bidding UI (components/, constants/, hooks/, pages/, types/, utils/)
+  - courses/ — Course browsing
+  - dashboard/ — Student dashboard
+  - notification/ — Notification center
+  - profile/ — Student profile
+  - switch/ — Flex switch / course switching
+
+  **API layer** (`src/lib/api/`):
+  - client-browser.ts / client-server.ts — Axios HTTP clients
+  - interceptors.ts — Request/response interceptors
+  - token-refresh.ts — Token refresh logic
+  - mutations/ (5) — React Query mutations
+  - queries/ (8) — React Query queries
+  - services/ (8) — API service functions
+
+  **Key types** (src/features/bidding/types/):
+  CampaignBiddingResponse, FormValues (capital_granted/spent/left, credits,
+  primary_course/backup_course), BiddingConfig, PrimaryBids, AvailableCourse
+
+  **Key hooks** (src/features/bidding/hooks/):
+  use-bidding-form, use-bidding-courses, use-course-conflicts,
+  use-add-drop-waitlist-form, use-pre-bidding-form
+
+  **Tech stack:**
+  - Next.js 14 App Router
+  - Ant Design (antd-provider) + TailwindCSS
+  - React Query (query-provider), user context (user-provider), notification context
+  - Custom Card/Modal/Table/ErrorBoundary components (src/components/)
 
   ## Key Business Rules
 
-  1. Capital (points) allocation: Students get capital per campaign, distributed across bids per module
-  2. Campaign has minCapitalGranted/maxCapitalGranted and minCreditsToFulfill/maxCreditsToFulfill
-  3. Bids have primary and backup types; backup_size is configurable per campaign
-  4. Enrollment priority: bid_points + gpa_score + essay_score; ties by timestamp
-  5. Campaign phases: defined via CampaignPhaseConfig, control what actions students can take
-  6. Simulation runs calculate cutoff prices and allocate students to classes
-  7. Waitlist: auto-promotion when seats open, priority by bid points
-  8. Flex Switch: course switch requests with file upload, approval workflow
-  9. Group bidding: students bid as groups with shared simulation
-  10. Course packs: bundled course ordering system
+  1. **Capital allocation**: Students get minCapitalGranted–maxCapitalGranted points per campaign, distributed across bids per module
+  2. **Credits**: minCreditsToFulfill–maxCreditsToFulfill per campaign
+  3. **Bid types**: Primary and backup bids; backup_size configurable per campaign
+  4. **Enrollment priority**: bid_points + gpa_score + essay_score; ties broken by timestamp
+  5. **Campaign phases**: Defined via CampaignPhaseConfig, control available student actions at each point in time
+  6. **Simulation**: SimulationRun calculates cutoff prices and allocates students to classes
+  7. **Waitlist**: Auto-promotion when seats open, priority by bid points
+  8. **Flex Switch**: Course switch request → file upload → approval workflow
+  9. **Group bidding**: Students bid as groups with shared simulation
+  10. **Course packs**: Bundled course ordering system
+  11. **Feature flags**: FeatureAccess entity + FeatureAccessVoter control per-feature rollout
 
   ## Conventions
 
-  PHP/Symfony:
-  - PHP 8.1+ attributes (not annotations) for ORM mappings and routes
+  **PHP / Symfony:**
+  - PHP 8.1+ attributes (NOT annotations) for ORM and routes
   - PSR-12 coding standard
-  - Constructor dependency injection (autowire: true in services.yaml)
+  - Constructor dependency injection (autowire: true)
   - Request DTOs implement DtoInterface, resolved by DtoArgumentResolver
-  - Response DTOs use Transformer/ classes for entity-to-DTO conversion
-  - Doctrine migrations in migrations/ (bin/console make:migration)
-  - OpenAPI docs via NelmioApiDocBundle (#[OA\...] attributes)
+  - Response DTOs use Transformer/ classes for entity → DTO conversion
+  - Doctrine migrations in migrations/ (never manual SQL)
+  - OpenAPI docs via `#[OA\...]` attributes (NelmioApiDocBundle)
   - One controller per action pattern (single __invoke method)
+  - Status types are entity-based (not PHP enums) — use repository lookups
 
-  TypeScript/React:
-  - TypeScript strict mode, Next.js App Router ('use client' for interactive components)
-  - React Query for server state (queries/mutations), Zustand for client state (bidding-admin)
-  - Formik + Yup for forms (bidding-admin), custom hooks for forms (bidding-web)
+  **TypeScript / React:**
+  - TypeScript strict mode
+  - Next.js 14 App Router ('use client' for interactive components)
+  - React Query for server state, Zustand for client state (bidding-admin only)
+  - Formik + Yup for forms (bidding-admin), custom hooks (bidding-web)
   - ESLint + Prettier, conventional commits (commitlint)
-  - Feature-based folder structure in bidding-web
-  - Domain-based folder structure in bidding-admin/src/src/
+  - Feature-based folders in bidding-web, domain-based folders in bidding-admin/src/src/
 
   ## Development
 
-  ```
-  bidding-api:   ./deploy/scripts/up-dev.sh && bin/console doctrine:migrations:migrate
-  bidding-admin: npm run start:dev (port 4007)
-  bidding-web:   npm run start:dev (port 4006)
+  ```bash
+  bidding-api:    ./deploy/scripts/up-dev.sh && bin/console doctrine:migrations:migrate
+  bidding-admin:  npm run start:dev  # port 4007
+  bidding-web:    npm run start:dev  # port 4006
   ```
 
-  Environments: DEV (bidding-dev.insead.edu), INT (bidding-int.insead.edu), UAT (bidding-uat.insead.edu), PROD (bidding.insead.edu)
+  Environments: DEV (.dev), INT (.int), UAT (.uat), PROD (bidding.insead.edu)
   Build variants: npm run build:{int,uat,prd}
   API docs: /api/doc (NelmioApiDocBundle)
 
-  ## Change Patterns
+  ## Brownfield Safety Rules (ALWAYS FOLLOW)
 
-  Adding a field: Entity property → migration → Request/Response DTO + Transformer → Controller → admin UI → web UI → tests
-  New API endpoint: Controller (Route attribute, OA annotations) → Request DTO (DtoInterface) → Domain Service → Response DTO Transformer → Security voter if needed → frontend API client → tests
-  New feature: Often spans all 3 apps; start with API, then admin, then web
-  Bug fix: Identify affected app(s) → write failing test → fix → verify across apps
-  Database change: ALWAYS create Doctrine migration, never manual SQL
+  1. **Never modify existing entity properties** without a Doctrine migration
+  2. **Never remove or rename** existing API endpoints, entity fields, or enum values — only add new ones
+  3. **Always check for in-flight campaigns/sessions** before changing behavior
+  4. **All database changes** go through Doctrine migrations (with both up() and down() methods)
+  5. **Test against existing data** — never assume empty tables
+  6. **Feature flags** (FeatureAccess) for risky behavioral changes
+  7. **Preserve existing Response DTO shapes** — add new fields but never remove/rename existing ones
+  8. **Check webhook consumers** (MuleSoft) before changing webhook endpoint contracts
 
 rules:
   proposal:
-    - Keep focused on a single feature or fix
+    # ---------- Safety & Scope ----------
+    - Keep focused on a single feature or fix; avoid scope creep
     - Identify which apps are affected (api, admin, web) and their specific impact
-    - List affected entities, domain services, and controllers by name
-    - Note migration requirements (new columns, tables, indexes)
-    - Consider backward compatibility with existing campaigns/sessions in progress
-    - Identify if Flow/Module architecture applies (complex multi-step operations)
+    - "List affected entities, domain services, controllers, and repositories by exact name"
+    - Note migration requirements (new columns, tables, indexes, data migrations)
+    - Consider backward compatibility with live campaigns, active sessions, and existing student data
+    - Identify if Flow/Module architecture applies (for multi-step bidding lifecycle operations)
+    - "For bug fixes: describe the root cause, not just the symptom"
+    - "For features: describe what ALREADY exists that is similar and how the new thing relates to it"
+
+    # ---------- Risk Assessment ----------
+    - Flag if any existing API endpoint response shape changes (breaking change risk)
+    - Flag if any existing entity field is modified (migration risk)
+    - Flag if webhook contract changes (external consumer risk — MuleSoft)
+    - Flag if simulation logic changes (data integrity risk)
+    - Note if feature flag (FeatureAccess) should be used for gradual rollout
+    - Identify if existing unit tests need updating (regression risk)
 
   specs:
-    - Use Given/When/Then format for scenarios
-    - Include API endpoint specs (method, path, request/response shape) when applicable
+    # ---------- Scenario Format ----------
+    - Use Given/When/Then format for all scenarios
+    - Include API endpoint specs when applicable (method, path, request body, response shape)
     - Specify validation rules matching existing DtoInterface patterns
-    - Cover edge cases: active campaigns, in-progress simulations, concurrent bids
-    - Reference existing similar behavior before defining new patterns
+
+    # ---------- Coverage Requirements ----------
+    - "Cover edge cases: active campaigns, in-progress simulations, concurrent bids, race conditions"
+    - "Cover backward compatibility: existing data must continue to work unchanged"
+    - Reference existing similar behavior before defining new behavior
     - Document impact on existing sessions/campaigns data
+    - Include negative test scenarios (invalid input, missing permissions, expired sessions)
+
+    # ---------- Brownfield Safety ----------
+    - "For modified endpoints: show BOTH old and new response shapes, highlighting only additions"
+    - "For new entities: document nullable vs required fields and default values for existing rows"
+    - "For behavioral changes: document what happens to in-flight operations during deployment"
 
   design:
-    - Follow existing patterns: check similar implementations in the codebase first
-    - Use Flow/Module pattern for complex multi-step operations
-    - Use DTO pattern (DtoInterface + DtoArgumentResolver) for all API request/response
-    - Plan Doctrine migration strategy (up and down methods)
+    # ---------- Pattern Adherence ----------
+    - Check for similar implementations in the codebase FIRST before designing new patterns
+    - Use existing patterns consistently
+    - "Controller: use one-controller-per-action pattern with __invoke method"
+    - "Request validation: DtoInterface + DtoArgumentResolver pattern"
+    - "Response transformation: Dto/Response/Transformer/ classes"
+    - "Complex operations: Flow/Module pattern (if multi-step, e.g., bidding lifecycle)"
+    - "Feature flags: FeatureAccess entity + FeatureAccessVoter voter"
+    - "Status values: entity-based status types (NOT PHP enums), resolved via repository"
+
+    # ---------- Database & Migration Safety ----------
+    - Plan Doctrine migration strategy with BOTH up() and down() methods
+    - "New nullable columns: provide DEFAULT values so existing rows remain valid"
+    - "New required columns: require a data migration step or a NOT NULL with default"
     - Consider query optimization (indexes, eager/lazy loading, DQL)
-    - Plan backward compatibility with existing data
-    - Specify file locations using actual project paths
+    - Never remove existing database columns — only add or soft-deprecate
+
+    # ---------- API Contract Safety ----------
+    - New fields in API responses are additive only (never remove/rename existing fields)
+    - Specify exact file locations using actual project paths
     - Note if Transformer classes need updates for DTO changes
+    - Plan backward compatibility for API consumers (admin & web frontends)
+
+    # ---------- Frontend Impact ----------
+    - Identify which frontend components need updating (exact file paths)
+    - Plan React Query cache invalidation for affected queries
+    - Consider loading/error states for new UI flows
+    - Check if Formik/Yup schemas need updates (bidding-admin) or custom hooks (bidding-web)
 
   tasks:
-    - Order by dependency: migration → API entities/services → API controllers → admin UI → web UI → tests
-    - Keep individual tasks completable in one session (under 2 hours)
+    # ---------- Ordering ----------
+    - "Dependency order: migration → entity changes → domain services → controllers → admin UI → web UI → tests"
+    - "Always lead with migration task when schema changes are needed"
+    - Mark cross-app dependencies explicitly (e.g., "requires API task #2 to be complete")
+
+    # ---------- Sizing ----------
+    - Keep individual tasks completable in one session (under 2 hours of focused work)
+    - Split large services or components into separate tasks if needed
+    - "If a task touches more than 5 files across different concerns, split it"
+
+    # ---------- Specificity ----------
     - Include specific file paths (e.g., src/Entity/Campaign.php, src/Domain/Bid/Service/)
-    - Add PHPUnit test tasks for API changes (tests/Unit/)
-    - Add Jest test tasks for frontend changes
-    - Mark cross-app dependencies explicitly
-    - Include migration task as first task when schema changes are needed
+    - Reference existing patterns to follow (e.g., "follow CampaignController pattern")
+    - Include exact Symfony commands (e.g., bin/console make:migration, bin/console doctrine:migrations:migrate)
+
+    # ---------- Testing & Verification ----------
+    - Add PHPUnit test task for every API change (tests/Unit/{Controller,Domain}/)
+    - "For bug fixes: first task should be writing the failing test that reproduces the bug"
+    - Include manual verification steps (curl commands or browser testing instructions)
+    - Note which existing tests might be affected and need updating
+    - "Final task: smoke test across all affected apps to verify no regression"
