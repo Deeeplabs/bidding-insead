@@ -10,6 +10,17 @@ Stats must follow this priority:
 | **2** | No pre_bidding/bidding_round active, but a downstream module (simulation, add_drop_waitlist, etc.) IS active | Fall back to the **closest past bidding round** |
 | **3** | No phase of any type is currently active | Return `null` for all stats |
 
+### Requirement: Total students must respect student_filters (include/exclude)
+
+The `total_students` count on the campaign list must apply the same student filtering logic as the preview page:
+
+- **DB table filters** (`campaign_student_filter`): campaign-level + phase-level, scoped by `$phaseConfigId`
+- **Config-level filters** (`moduleConfig.config.student_filters`): include/exclude by student_id, student_type, campus, etc.
+- **Student selection** (`moduleConfig.student_selection`): `include_all_students` / `include_filtered_students_only`
+- **Selected student IDs** (`moduleConfig.config.selected_student_ids`): explicit ID restriction
+
+Both Tier 1 and Tier 2 must pass the **complete config** (including `student_filters` and `student_selection`) along with the correct `phaseConfigId` to `getEligibleStudents()`.
+
 ---
 
 #### Scenario: Campaign with active pre-bidding shows stats from that module
@@ -27,6 +38,25 @@ Stats must follow this priority:
 - **WHEN** the campaign list endpoint is called
 - **THEN** `total_students` = 60 (30 + 30)
 - **AND** bidding completed/pending aggregated across both
+
+#### Scenario: Active bidding with student_include filters → total reflects filtered count
+- **GIVEN** a campaign with an active bidding_round phase
+- **AND** `moduleConfig.config.student_filters` has `student_include` entries (e.g., 469 specific students)
+- **WHEN** the campaign list endpoint is called
+- **THEN** `total_students` reflects the filtered count (469), NOT all promotion students
+- **AND** this matches the "Eligible Students" count shown on the preview page
+
+#### Scenario: Active bidding with student_exclude filters → total excludes filtered students
+- **GIVEN** a campaign with an active bidding_round phase
+- **AND** `moduleConfig.config.student_filters` has `student_exclude` entries
+- **WHEN** the campaign list endpoint is called
+- **THEN** `total_students` excludes those students from the count
+
+#### Scenario: Active bidding with DB-level phase filters → total uses phase-specific filters
+- **GIVEN** a campaign with phase-specific `campaign_student_filter` entries (linked to a `phaseConfigId`)
+- **WHEN** the campaign list endpoint is called
+- **THEN** the stats calculation passes the correct `phaseConfigId` to `getEligibleStudents()`
+- **AND** only filters matching that phase (or campaign-level) are applied
 
 #### Scenario: Bidding round completed, add/drop & waitlist active → use past bidding round stats (TIER 2)
 - **GIVEN** a campaign where:
@@ -67,21 +97,21 @@ Stats must follow this priority:
 
 ### API Response Shape
 
-**Tier 1 — Active pre_bidding/bidding_round (aggregated):**
+**Tier 1 — Active pre_bidding/bidding_round (aggregated, with filters applied):**
 ```json
 {
-  "total_students": 66,
+  "total_students": 938,
   "bidding_completed_count": 15,
-  "bidding_pending_count": 51
+  "bidding_pending_count": 923
 }
 ```
 
 **Tier 2 — Non-bidding module active, fallback to past bidding round:**
 ```json
 {
-  "total_students": 33,
+  "total_students": 469,
   "bidding_completed_count": 14,
-  "bidding_pending_count": 19
+  "bidding_pending_count": 455
 }
 ```
 

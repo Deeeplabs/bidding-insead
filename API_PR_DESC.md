@@ -1,8 +1,8 @@
-# Fix campaign list stats: 3-tier calculation + aggregation
+# Fix campaign list stats: 3-tier calculation + aggregation + student_filters
 
 ## Problem
 
-Three issues with `calculateCampaignStatistics()` in `CampaignService.php`:
+Four issues with `calculateCampaignStatistics()` in `CampaignService.php`:
 
 ### 1. Stats show 0/0/0 when downstream module is active after bidding completes
 When bidding round is completed but add/drop & waitlist is still active, stats should show the completed bidding round's data (e.g., 33/14/19), not 0/0/0.
@@ -12,6 +12,9 @@ When both pre-bidding (33 students) AND bidding round (33 students) are active s
 
 ### 3. Completed campaigns show stale stats instead of null
 `getCurrentActivePhaseDetails()` has a `final_enrollment` fallback, so completed campaigns never return null.
+
+### 4. Total students must respect student_filters (include/exclude)
+The `total_students` count must match what the preview page shows per module. Both paths use `getEligibleStudents()` with the correct config (including `student_filters`, `student_selection`, `selected_student_ids`) and `phaseConfigId` to scope DB-level filters.
 
 ## Solution: 3-Tier Strategy
 
@@ -31,6 +34,22 @@ calculateCampaignStatistics()     ← main: iteration + tier routing
 └── calculateStatsFromPhase()     ← Tier 2: single phase stats (past bidding round)
 ```
 
+### Student filters flow (both tiers):
+
+```
+moduleConfig = phaseConfig->getModuleConfig()
+  → { "config": { "student_filters": [...], "selected_student_ids": [...] }, "student_selection": {...} }
+
+config = array_merge(moduleConfig['config'], {student_selection: moduleConfig['student_selection']})
+  → { "student_filters": [...], "student_selection": {...}, "selected_student_ids": [...] }
+
+getEligibleStudents($campaign, $config, $phaseConfigId)
+  → DB table filters (campaign_student_filter, scoped by phaseConfigId)
+  → Config filters (student_filters: include/exclude)
+  → Student selection (include_all_students, include_filtered_students_only)
+  → Selected student IDs (explicit ID restriction)
+```
+
 ## Files Changed
 
 | File | Change |
@@ -43,18 +62,19 @@ calculateCampaignStatistics()     ← main: iteration + tier routing
 | File | Reason |
 |------|--------|
 | `src/Entity/Campaign.php` | Entity methods unchanged — `final_enrollment` fallback is intentional for other consumers |
+| `src/Domain/Campaign/ActiveCampaign/CampaignStudentEligibilityService.php` | Used as-is — already handles student_filters correctly |
 | Database | No migration needed — stats calculated dynamically |
 
 ## API Response Examples
 
-**Tier 1 — Both pre-bidding + bidding_round active (aggregated):**
+**Tier 1 — Both pre-bidding + bidding_round active (aggregated with filters):**
 ```json
-{ "total_students": 66, "bidding_completed_count": 10, "bidding_pending_count": 56 }
+{ "total_students": 938, "bidding_completed_count": 10, "bidding_pending_count": 928 }
 ```
 
 **Tier 2 — Bidding completed, add/drop active (past bidding round):**
 ```json
-{ "total_students": 33, "bidding_completed_count": 14, "bidding_pending_count": 19 }
+{ "total_students": 469, "bidding_completed_count": 14, "bidding_pending_count": 455 }
 ```
 
 **Tier 3 — All completed:**
