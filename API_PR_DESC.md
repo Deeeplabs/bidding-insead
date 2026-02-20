@@ -1,75 +1,91 @@
-# Fix campaign list stats: 3-tier calculation + aggregation + student_filters
+# Fix: Cross-promotion student campaign visibility for per-module student includes
 
 ## Problem
 
-Four issues with `calculateCampaignStatistics()` in `CampaignService.php`:
+When an admin adds a student from a different promotion to a campaign for "Pre-bidding ONLY" (via the module configuration UI), the student cannot see the campaign on their dashboard or bidding page. This prevents cross-promotion students who are explicitly added to specific campaign phases from accessing those campaigns.
 
-### 1. Stats show 0/0/0 when downstream module is active after bidding completes
-When bidding round is completed but add/drop & waitlist is still active, stats should show the completed bidding round's data (e.g., 33/14/19), not 0/0/0.
+## Root Cause
 
-### 2. Stats not aggregated across multiple active pre-bidding/bidding modules
-When both pre-bidding (33 students) AND bidding round (33 students) are active simultaneously, total should be 66 — not just 33 from the first phase found.
+The system stores per-module student filters in **two separate locations** without cross-referencing them:
+
+1. **`campaign_student_filters` DB table** — for campaign-level filters
+2. **`campaign_phase_configs.module_config` JSON blob** — for per-module filters (e.g., "Pre-bidding ONLY")
+
+The campaign discovery flow in `ActiveCampaignService::getActiveBiddingRounds` had **two problems**:
+
+### Problem 1: Discovery Gap (PRIMARY — this PR)
+
+The cross-promotion discovery method `findOpenCampaignsByStudentInclude` searched **only** the `campaign_student_filters` DB table. When admins configure per-module student includes via the module configuration UI, those filters are saved **exclusively** to `module_config.config.student_filters` JSON — never to the DB table. So the campaign was never discovered at all for cross-promotion students.
+
+```
+Student Dashboard Request
+  → getActiveBiddingRounds()
+    → Step 1: Query by promotion     → Student not in this promotion ❌
+    → Step 2: findOpenCampaignsByStudentInclude (DB table) → Not in table ❌
+    → Campaign never discovered. Student sees nothing.
+```
+
+### Problem 2: Eligibility Check (previously fixed)
+
+Even if a campaign was discovered, `isStudentEligibleForCampaign` checked `tableFilters` and `configFilters` sequentially rather than merging them, causing students in phase-specific configs to be rejected if campaign-level filters existed. This was fixed in a prior commit by merging both filter sources.
 
 ### 3. Completed campaigns show stale stats instead of null
 `getCurrentActivePhaseDetails()` has a `final_enrollment` fallback, so completed campaigns never return null.
 
-### 4. Total students must respect student_filters (include/exclude)
-The `total_students` count must match what the preview page shows per module. Both paths use `getEligibleStudents()` with the correct config (including `student_filters`, `student_selection`, `selected_student_ids`) and `phaseConfigId` to scope DB-level filters.
+### Fix 1: JSON-based Cross-Promotion Discovery (NEW)
 
-## Solution: 3-Tier Strategy
+Added a third campaign discovery path that searches `module_config` JSON for `student_include` entries:
 
-Complete rewrite of `calculateCampaignStatistics()` with three tiers:
-
-| Tier | Condition | Action |
-|------|-----------|--------|
-| **Tier 1** | Pre-bidding or bidding_round is active (`start <= now <= end`) | Aggregate stats across ALL active pre_bidding + bidding_round phases |
-| **Tier 2** | No bidding active, but downstream module (simulation/add_drop) IS active | Fall back to closest past bidding round via `getCurrentActivePhaseDetailsByModule('bidding_round', true)` |
-| **Tier 3** | No phase of any type is active | Return `null` (frontend shows "-") |
-
-### Method structure:
+1. **New repository method**: `CampaignPhaseConfigRepository::findOpenCampaignsByStudentIncludeInConfig(studentId)` — queries `campaign_phase_configs.module_config` JSON using LIKE matching for `student_include` entries containing the student ID.
+2. **Third discovery step** in `getActiveBiddingRounds` — calls the new method after the existing table-based lookup, with de-duplication via `$existingCampaignIds`.
 
 ```
-calculateCampaignStatistics()     ← main: iteration + tier routing
-├── aggregateBiddingStats()       ← Tier 1: sum across all active pre_bidding + bidding_round
-└── calculateStatsFromPhase()     ← Tier 2: single phase stats (past bidding round)
+Student Dashboard Request
+  → getActiveBiddingRounds()
+    → Step 1: Query by promotion                              → ❌
+    → Step 2: findOpenCampaignsByStudentInclude (DB table)     → ❌
+    → Step 3: findOpenCampaignsByStudentIncludeInConfig (JSON) → ✅ Found!
+    → isStudentEligibleForCampaign (merged filters)            → ✅ Eligible!
+    → Campaign appears on dashboard ✅
 ```
 
-### Student filters flow (both tiers):
+### Fix 2: Filter Merge (EXISTING — prior commit)
 
-```
-moduleConfig = phaseConfig->getModuleConfig()
-  → { "config": { "student_filters": [...], "selected_student_ids": [...] }, "student_selection": {...} }
+`isStudentEligibleForCampaign` merges `tableFilters` and `configFilters` before validation:
 
-config = array_merge(moduleConfig['config'], {student_selection: moduleConfig['student_selection']})
-  → { "student_filters": [...], "student_selection": {...}, "selected_student_ids": [...] }
-
-getEligibleStudents($campaign, $config, $phaseConfigId)
-  → DB table filters (campaign_student_filter, scoped by phaseConfigId)
-  → Config filters (student_filters: include/exclude)
-  → Student selection (include_all_students, include_filtered_students_only)
-  → Selected student IDs (explicit ID restriction)
+```php
+$allFilters = array_merge($tableFilters, $configFilters);
+if (!empty($allFilters)) {
+    return $this->checkStudentAgainstFilters($student, $allFilters, $campaignId);
+}
 ```
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `src/Domain/Campaign/Campaign/CampaignService.php` | Rewrite `calculateCampaignStatistics()` + add `aggregateBiddingStats()` + add `calculateStatsFromPhase()` |
-| `src/Domain/Campaign/Campaign/CampaignListDto.php` | Already nullable (`?int`) from previous iteration |
+| `src/Repository/CampaignPhaseConfigRepository.php` | Added `findOpenCampaignsByStudentIncludeInConfig` — searches `module_config` JSON for `student_include` entries |
+| `src/Domain/Campaign/ActiveCampaign/ActiveCampaignService.php` | Added `CampaignPhaseConfigRepository` dependency + third cross-promotion discovery block in `getActiveBiddingRounds` |
+| `src/Domain/Campaign/ActiveCampaign/CampaignStudentEligibilityService.php` | *(Prior commit)* Merged `tableFilters` + `configFilters` in `isStudentEligibleForCampaign` |
 
-### NOT Changed
+## Discovery & Eligibility Flow (Updated)
 
-| File | Reason |
-|------|--------|
-| `src/Entity/Campaign.php` | Entity methods unchanged — `final_enrollment` fallback is intentional for other consumers |
-| `src/Domain/Campaign/ActiveCampaign/CampaignStudentEligibilityService.php` | Used as-is — already handles student_filters correctly |
-| Database | No migration needed — stats calculated dynamically |
-
-## API Response Examples
-
-**Tier 1 — Both pre-bidding + bidding_round active (aggregated with filters):**
-```json
-{ "total_students": 938, "bidding_completed_count": 10, "bidding_pending_count": 928 }
+```
+getActiveBiddingRounds(student)
+│
+├─ Step 1: Promotion-based query (existing)
+│   → Find campaigns matching student's promotion
+│   → For each: isStudentEligibleForCampaign() → add to eligible list
+│
+├─ Step 2: Table-based cross-promotion (existing)
+│   → findOpenCampaignsByStudentInclude() searches campaign_student_filters table
+│   → For each: skip duplicates → isStudentEligibleForCampaign() → add to eligible list
+│
+├─ Step 3: JSON-based cross-promotion (NEW)
+│   → findOpenCampaignsByStudentIncludeInConfig() searches module_config JSON
+│   → For each: skip duplicates → isStudentEligibleForCampaign() → add to eligible list
+│
+└─ Sort + paginate → return to student dashboard
 ```
 
 **Tier 2 — Bidding completed, add/drop active (past bidding round):**
@@ -77,7 +93,18 @@ getEligibleStudents($campaign, $config, $phaseConfigId)
 { "total_students": 469, "bidding_completed_count": 14, "bidding_pending_count": 455 }
 ```
 
-**Tier 3 — All completed:**
-```json
-{ "total_students": null, "bidding_completed_count": null, "bidding_pending_count": null }
-```
+- **Fixes visibility**: Cross-promotion students added via per-module config can now see the campaign
+- **Phase-aware**: Students added to "Pre-bidding ONLY" see the campaign during pre-bidding but NOT during bidding round (enforced by `isStudentEligibleForCampaign` checking the active phase's config)
+- **Preserves existing behavior**: Same-promotion students and table-based cross-promotion still work identically
+- **De-duplication**: Campaigns found via multiple discovery paths appear only once
+- **No database migration required**
+
+## Testing
+
+Manual verification required:
+
+- [ ] **2.1** Create campaign for promotion A → add student from promotion B to Pre-bidding module config → impersonate student B → verify campaign appears on dashboard
+- [ ] **2.2** Advance to Bidding Round phase → verify campaign does NOT appear for student B
+- [ ] **2.3** Verify same-promotion students still see campaigns normally
+- [ ] **2.4** Verify campaign-level `student_include` filters (DB table) still work
+- [ ] **2.5** Verify de-duplication: student found via multiple paths → campaign appears only once
