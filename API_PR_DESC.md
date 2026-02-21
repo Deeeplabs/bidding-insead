@@ -1,150 +1,42 @@
-# Fix Duplicate Preset and Edit Campaign Issues
+# Fix Campaign Status Reversion and Module Closing Bug
 
 ## Problem
 
-Three bugs were identified in the campaign management system:
+When a user edits a campaign through the admin portal while a bidding round is actively running, the campaign module (Bidding Round) was reverting to its original draft-like state. This unintentionally overrode the running phase's `start_date` and `end_date` back to their initial configured dates, causing the phase to interpret itself as `CLOSE` and effectively terminating the current round.
 
-### Issue 1: Preset Duplication Issue
-**Jira**: (to be added)
+### Root Cause Analysis
 
-When duplicating a campaign without selecting "Duplicate Campaign Flow", the preset was still being copied from the source campaign. This created user confusion as they expected an empty preset dropdown.
+1. **State Divergence:** The `CampaignPhaseService::activatePhase` function correctly modified the `CampaignPhaseConfig`'s scalar database columns (`start_date`, `end_date`), but left its internal JSON `module_config` attribute to still point to its original setup value.
+2. **Frontend Misinterpretation over Updates:** The frontend UI relies heavily on the full campaign config payload. Because `module_config` contained the stale properties, editing *any other module* bundled the old attributes and pushed them back to the backend.
+3. **Backend Overwriting Constraint:** When `PUT /v2/api/campaigns/{id}/save-with-modules` used `updateWithModules`, it read the stale dates given by `module_config`. It overwrote the column using the exact old dates, completely reverting the phase payload safely.
 
-### Issue 2: Missing Date/Time Clash Validation
-**Jira**: (to be added)
+## Solution
 
-When configuring campaign phases (bidding rounds and simulation), there was no validation to prevent overlapping dates. This caused runtime errors when running the campaign.
+Update the JSON value within `module_config` inside `CampaignPhaseService::activatePhase()` whenever a phase's start status (`open`) or end status (`close`) runs. Consequently, when the frontend fetches the detailed state of the campaign, it receives the correctly synchronized JSON data. Any future PUT requests sent to `save-with-modules` will now carry over the proper live dates, stopping the destructive overwriting effect onto the active phase configuration.
 
-### Issue 3: Preset Change Validation on Open Campaign
-**Jira**: (to be added)
+### Changes Made
 
-When editing a campaign that is already "open", the system was incorrectly blocking ALL preset changes, even when the preset_id remained the same. This prevented users from saving the campaign even when no actual preset change was made.
+**Modified File:** `src/Domain/Campaign/Campaign/CampaignPhaseService.php`
 
-1. **`campaign_student_filters` DB table** — for campaign-level filters
-2. **`campaign_phase_configs.module_config` JSON blob** — for per-module filters (e.g., "Pre-bidding ONLY")
-
-### 1. Preset Duplication Fix
-
-**Modified File**: `src/Domain/Campaign/Campaign/CampaignDuplicationService.php`
-
-- Moved the `setPreset()` call inside the `if ($duplicateCampaignFlow)` block
-- Previously, preset was always copied regardless of the `duplicateCampaignFlow` parameter
-- Now, when `duplicateCampaignFlow=false`, the new campaign will have `preset: null`
-- When `duplicateCampaignFlow=true`, behavior remains unchanged (preset is copied)
-
-**Code Change**:
-```php
-// Before: Always copied preset (line ~59)
-$newCampaign->setPreset($sourceCampaign->getPreset());
-
-// After: Conditionally copy preset based on duplicateCampaignFlow parameter
-// (moved inside the if ($duplicateCampaignFlow) block around line ~167)
-if ($duplicateCampaignFlow) {
-    // ... copy campaign flow ...
-    $newCampaign->setPreset($sourceCampaign->getPreset());
-}
-```
-
-### 2. Date/Time Clash Validation
-
-**Modified File**: `src/Domain/Campaign/Campaign/CampaignValidationService.php`
-
-Added new validation method `validatePhaseDateOverlap()`:
-- Iterates through campaign modules to check for overlapping dates
-- Validates that bidding round phases end before simulation phases start
-- Returns array of error messages when overlaps are detected
-
-**Modified**: `validateCampaignStart()` method now calls `validatePhaseDateOverlap()`
-- Prevents campaign from opening/starting with invalid phase dates
-- Returns 400 Bad Request with validation error when dates overlap
-
-**Validation Logic**:
-- Checks that no two phases have overlapping date ranges
-- Specifically validates bidding_round end date is before simulation start date
-- Allows gaps between phases (no minimum gap required)
-
-### 3. Preset Change Validation Fix
-
-**Modified File**: `src/Domain/Campaign/Campaign/CampaignService.php`
-
-- Added logic to compare existing preset_id with new preset_id before blocking changes
-- Now only blocks preset changes when: campaign status is "open" AND preset_id is actually different
-- If preset_id remains the same (no actual change), the edit is allowed
-
-**Code Change**:
-```php
-// Before: Blocked all preset changes when status is 'open'
-if ($campaign->getStatus() === 'open') {
-    throw new \InvalidArgumentException('Cannot change preset while campaign is open');
-}
-
-// After: Only blocks if status is 'open' AND preset is actually changing
-$existingPresetId = $campaign->getPreset()?->getId();
-$newPresetId = $data['preset_id'];
-
-if ($campaign->getStatus() === 'open' && $existingPresetId != $newPresetId) {
-    throw new \InvalidArgumentException('Cannot change preset while campaign is open');
-}
-```
+- In the `activatePhase` method, when handling the `open` status, after setting the scalar `start_date`, we now also fetch the JSON `module_config` array and explicitly update the string value for `start_date` utilizing the precise `\DateTime::ATOM` format representing `$now`.
+- Similarly, when handling the `close` status, after setting the scalar `end_date`, we fetch and explicitly update the `end_date` value inside `module_config` using `\DateTime::ATOM` representing `$now`.
+- The parsed array is then re-set onto the `$phaseConfig->setModuleConfig($moduleConfig)` function, accurately recording it back to the database state upon execution flush.
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `src/Domain/Campaign/Campaign/CampaignDuplicationService.php` | Conditionally copy preset based on duplicateCampaignFlow parameter |
-| `src/Domain/Campaign/Campaign/CampaignValidationService.php` | Added validatePhaseDateOverlap method and integration |
-| `src/Domain/Campaign/Campaign/CampaignService.php` | Fixed preset change validation to allow same preset on open campaigns |
-
-## API Changes
-
-### Campaign Duplication Endpoint
-- **Endpoint**: `POST /v2/api/campaigns/{id}/duplicate`
-- **Parameter**: `duplicate_campaign_flow` (boolean)
-- **Behavior Change**: When `duplicate_campaign_flow=false`, response now returns `preset: null`
-
-### Campaign Open Endpoint
-- **Endpoint**: `POST /v2/api/campaigns/{id}/open`
-- **New Validation**: Returns 400 Bad Request if phase dates overlap
-- **Error Response**:
-```json
-{
-  "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "Validation failed",
-    "details": {
-      "phase_dates": ["Phase dates overlap detected"]
-    }
-  }
-}
-```
-
-### Campaign Edit Endpoint
-- **Endpoint**: `PUT /v2/api/campaigns/{id}`
-- **Behavior Change**: When campaign status is "open", preset changes are now allowed if the preset_id remains the same
-- **Error Response** (when changing preset on open campaign):
-```json
-{
-  "error": {
-    "code": "INVALID_ARGUMENT",
-    "message": "Cannot change preset while campaign is open"
-  }
-}
-```
+| `src/Domain/Campaign/Campaign/CampaignPhaseService.php` | Synchronize \DateTime::ATOM payload into JSON module_config properties upon activating/closing phases. |
 
 ## Impact
 
-- **Fixed preset confusion**: Users no longer see a preset they didn't expect when duplicating without campaign flow
-- **Prevented runtime errors**: Date overlap validation prevents campaigns from failing during execution
-- **Fixed preset edit blocking**: Users can now save open campaigns without receiving false preset change errors
-- **Clear error messages**: Users receive actionable feedback when configuration is invalid
-- **Backward compatible**: Existing functionality preserved; only fixes behavior for edge case
+*   **Idempotent Safety:** Because `updateWithModules` replaces database dates safely to what it reads from the config, doing this will just securely replace timestamps with what they already are—meaning the entity doesn't shift its state properties away from Open.
+*   **Performance:** A fast mapping mutation since the JSON object is natively an array in PHP and Doctrine gracefully handles `json` database mapping. No performance bottlenecks.
+*   **Compatibility:** Admin UI logic seamlessly accommodates this because the format matches the standard `DateHelper::toIso` standard structure. No frontend modifications are needed.
 
 ## Testing
 
-Verified through integration tests:
-- [x] Campaign duplication with `duplicate_campaign_flow=false` returns `preset: null`
-- [x] Campaign duplication with `duplicate_campaign_flow=true` copies preset (unchanged behavior)
-- [x] Campaign open with overlapping phase dates returns 400 validation error
-- [x] Campaign open with valid phase dates works correctly
-- [x] Campaign edit on open campaign with same preset_id succeeds (no error)
-- [x] Campaign edit on open campaign with different preset_id returns error
-- [x] No regressions in existing campaign functionality
+Verified through comprehensive API testing:
+- [x] Tested initiating a Bidding Round and verified the `module_config` properly displays identical `start_date` matching the entity properties.
+- [x] Verified editing a distinct module component (like Simulation) doesn't interrupt or forcefully reset the active Bidding Round boundaries utilizing identical payload boundaries.
+- [x] Asserted no downstream database constraint exceptions occur during payload submission sequences.
