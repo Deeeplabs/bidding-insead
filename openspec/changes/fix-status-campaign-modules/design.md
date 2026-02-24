@@ -88,6 +88,18 @@ The INSEAD bidding system has bugs in campaign duplication that cause four main 
 
 **File:** `src/Domain/Dashboard/Campaign/AdminCampaignDetailService.php`
 
+### Decision 5: Fix Campaign API Phase Config Status Mapping
+
+**Current Behavior:**
+- In the `phase_configs` list within the Campaign list API and detail API responses, `is_active` returns the raw database boolean value (or null).
+- Frontend expects this to be evaluated dynamically as `'OPEN'`, `'COMPLETED'`, or `'CLOSE'` based on whether the dates have passed.
+
+**Fix:**
+- Update `CampaignResponse.php` and `CampaignDetailResponse.php`.
+- Check the phase config `startDate` and `endDate` against the current time and return the string `'OPEN'`, `'COMPLETED'`, or `'CLOSE'` correspondingly.
+
+**File:** `src/Controller/Api/Campaign/CampaignResponse.php` and `src/Controller/Api/Campaign/CampaignDetailResponse.php`
+
 ## Risks / Trade-offs
 
 ### Risk 1: Regression on Active Campaigns

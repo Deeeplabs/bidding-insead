@@ -29,6 +29,9 @@ When a Programme Manager (PM) duplicates a campaign, three critical issues occur
    - Add auto-activation logic that activates phase configs with dates but isActive=false
    - This handles existing duplicated campaigns saved before the fix was deployed
 
+5. **Fix Phase Config Status Mapping** (`CampaignResponse.php` & `CampaignDetailResponse.php`)
+   - Change `is_active` in the `phase_configs` array to evaluate to `'OPEN'`, `'COMPLETED'`, or `'CLOSE'` based on the configured dates instead of returning the boolean property directly.
+
 ## Capabilities
 
 ### New Capabilities

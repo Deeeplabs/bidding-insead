@@ -14,10 +14,12 @@ When a Programme Manager (PM) duplicates a campaign, they encounter issues when 
 2. **Orphaned Database Relations**: During campaign duplication inside `CampaignDuplicationService::duplicateCampaign()`, the loop properly initialized new `CampaignPhaseConfig` objects. However, it omitted explicitly linking the new configuration back to its cloned `CampaignModule`. Because the foreign key remained null, backend queries failed to retrieve the necessary parent contexts, causing the whole entity block to appear "undefined" on the client interface.
 3. **Inactive Duplicated Modules**: Duplicated `CampaignPhaseConfig` records are cloned with `isActive = false` by default. When these modules' dates and configurations are updated by the user via the frontend, the endpoints (specifically `saveModuleConfigByCampaignAndModule` and `configureAddDropDeadline` in `CampaignPhaseService.php`) updated the database fields but missed calling `setIsActive(true)`. Consequently, the module remained inactive and inaccessible.
 4. **Existing Duplicated Campaigns**: For campaigns that were duplicated and saved before the fix was deployed, the `isActive` flag remained `false` in the database, causing 404 errors when accessing the detail endpoint.
+5. **Phase Configs Status Null String Matching**: `is_active` parameter within the `phase_configs` list payload of list/detail campaign endpoints formerly output raw DB boolean states (or nulls). The UI maps active statuses using explicit `OPEN`, `COMPLETED`, `CLOSE` identifiers for completed/unstarted phases, creating a mismatch that disrupted module displays in the frontend dashboard.
+6. **Mismatched Campaign List Status**: On the campaign list screen, a module might incorrectly appear as grey/`CLOSE`, but when clicking into the detail view, it successfully displays `COMPLETED`. The campaign list module status was being overwritten by its last chronological phase config (e.g. `results_publication` with no dates), causing the completed `bidding_round` phases to be ignored in the returned DTO.
 
 ## Solution
 
-The solution stabilizes the Simulation module evaluation logic strictly for null/missing dates, restores complete referential integrity during duplication, and auto-activates phase configs for existing duplicated campaigns.
+The solution stabilizes the Simulation module evaluation logic strictly for null/missing dates, restores complete referential integrity during duplication, auto-activates phase configs for existing duplicated campaigns, and safely evaluates status strings based on chronological validity.
 
 ### Changes Made
 
@@ -33,6 +35,12 @@ The solution stabilizes the Simulation module evaluation logic strictly for null
 **Modified File 4:** `src/Domain/Dashboard/Campaign/AdminCampaignDetailService.php`
 - Added `autoActivatePhaseConfig()` method that auto-activates phase configs when accessing the detail endpoint. This fix handles existing duplicated campaigns that were saved before the code fix was deployed - if a phase config has dates set but `isActive` is false, it automatically activates and persists the change.
 
+**Modified File 5:** `src/Controller/Api/Campaign/CampaignResponse.php` & `src/Controller/Api/Campaign/CampaignDetailResponse.php`
+- Adjusted `phase_configs` iterator to interpret the phase config's `startDate` and `endDate` boundaries relative to the present time, emitting an unambiguous `'OPEN'`, `'COMPLETED'`, or `'CLOSE'` string under the `is_active` key instead of relying on its database boolean properties.
+
+**Modified File 6:** `src/Domain/Campaign/Campaign/CampaignService.php`
+- Fixed the module-level `$is_active` aggregation logic inside `listCampaignsDto()`. Instead of irresponsibly overwriting the module's generic status pointer inside the phase config loop, the builder now collects all calculated config status strings and accurately derives the active priority constraint (`OPEN` takes priority, then `COMPLETED`, lastly `CLOSE`). This ensures that list displays faithfully reflect the same completion data computed by the detailed admin access routes.
+
 ## Files Changed
 
 | File | Change |
@@ -41,6 +49,9 @@ The solution stabilizes the Simulation module evaluation logic strictly for null
 | `src/Domain/Campaign/Campaign/CampaignDuplicationService.php` | Invoke `setCampaignModule` manually during `CampaignPhaseConfig` duplication cloning. |
 | `src/Domain/Campaign/Campaign/CampaignPhaseService.php` | Enforce `$phaseConfig->setIsActive(true)` when editing existing modules/dates during `saveModuleConfigByCampaignAndModule` and `configureAddDropDeadline`. |
 | `src/Domain/Dashboard/Campaign/AdminCampaignDetailService.php` | Auto-activate phase configs that have dates but `isActive=false` when accessing the detail endpoint. |
+| `src/Controller/Api/Campaign/CampaignResponse.php` | Check phase config `startDate` and `endDate` against the current time and return string `'OPEN'`, `'COMPLETED'`, or `'CLOSE'`. |
+| `src/Controller/Api/Campaign/CampaignDetailResponse.php` | Check phase config `startDate` and `endDate` against the current time and return string `'OPEN'`, `'COMPLETED'`, or `'CLOSE'`. |
+| `src/Domain/Campaign/Campaign/CampaignService.php` | Add nested aggregation constraints to prevent list campaigns from hiding accurately `COMPLETED` phase modules. |
 
 ## Impact
 
