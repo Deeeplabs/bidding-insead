@@ -1,119 +1,87 @@
-# Fix Bidding Cycle Status Reset on Campaign Configuration Update
+# Fix PM Dashboard Active Campaign Count Mismatch
 
 ## Problem
 
-When a Programme Manager updates the main campaign configuration (e.g., modifying "Minimum total points" or "Max credits" via the campaign Edit screen), any currently active phases (like a Bidding Round) are incorrectly reset to "Not Started".
+The Programme Manager Dashboard displays an incorrect count for "Active Campaigns" in two places:
 
-**Impact:**
-1. **State Overwrite & Data Masking**: Active phases lose their runtime state (`start_date`/`end_date`). Associated statistics (e.g., submitted student bids) display as 0, effectively hiding live data.
-2. **Phase Progression Skipping**: After status corruption, progressing past the Bidding phase causes the Simulation phase to be skipped entirely — the campaign jumps directly to "Closed" Final Enrollment.
+1. **Header Stats Widget** — Shows "Active Campaigns: 68 / Running now", which is higher than the actual number of currently active campaigns.
+2. **Pagination Label** — Shows "Showing 61 - 68 of 68 campaigns" on the last page, but the table only renders 4 items (not 8).
+
+The visual count in the table and the total in the header/pagination do not match after manual verification.
 
 ### Root Cause
 
-The bug originates in two methods: `CampaignService::saveWithModules()` and `CampaignService::updateWithModules()`.
+The mismatch is caused by missing `endDate >= NOW()` filtering in two queries that compute **totals**, while the query that fetches the **paginated rows** already includes this filter:
 
-1. **Blind `module_config` overwrite on `CampaignModule`**: When the frontend submits a campaign update, it sends back all modules including their `module_config`. The backend was calling `$campaignModule->setModuleConfig($moduleData['module_config'])` which blindly replaced the config — wiping out runtime state like `start_date`/`end_date` set by `activatePhase()`.
+| Query | Location | Had `endDate >= NOW()`? |
+|-------|----------|------------------------|
+| Data fetch (paginated rows) | `CampaignService::listCampaigns` — `$qb` | ✅ Yes |
+| Count query (pagination meta) | `CampaignService::listCampaigns` — `$countQb` | ❌ **No** |
+| Dashboard stats (header widget) | `CampaignRepository::findOpenCampaigns` | ❌ **No** |
 
-2. **Unprotected phase date updates on `CampaignPhaseConfig`**: For existing phase configs, `start_date` and `end_date` from the request payload were applied unconditionally, overwriting dates set when the phase was activated/closed.
-
-3. **Fragile Final Enrollment lookup**: The Final Enrollment status check used `$module->getId() - 1` (database auto-increment arithmetic) to find the previous module, which is unreliable when module IDs aren't sequential.
+Campaigns whose `endDate` has passed but whose `status` was never changed from `'open'` were excluded from the paginated data but still counted in the total — inflating both the header stat and the pagination metadata.
 
 ## Solution
 
 ### Changes Made
 
+#### 1. Fix pagination count query — `CampaignService::listCampaigns`
+
 **File:** `src/Domain/Campaign/Campaign/CampaignService.php`
 
-#### 1. Merge `module_config` instead of overwriting (`saveWithModules` + `updateWithModules`)
+Added the `endDate >= :now` condition to `$countQb` when `$status === 'open'`, mirroring the existing condition on the data query `$qb`:
 
-**Before:**
 ```php
-if (isset($moduleData['module_config'])) {
-    $campaignModule->setModuleConfig($moduleData['module_config']);
-}
-```
-
-**After:**
-```php
-if (isset($moduleData['module_config'])) {
-    $existingCmConfig = $campaignModule->getModuleConfig() ?? [];
-    if (!empty($existingCmConfig)) {
-        $campaignModule->setModuleConfig(
-            $this->mergeModuleConfig($existingCmConfig, $moduleData['module_config'])
-        );
-    } else {
-        $campaignModule->setModuleConfig($moduleData['module_config']);
+if ($status) {
+    if ($status === 'open') {
+        $countQb->andWhere('c.endDate >= :now')
+                ->setParameter('now', new \DateTime());
     }
+    $countQb->andWhere('c.status = :status')
+            ->setParameter('status', $status);
 }
 ```
 
-This uses the existing `mergeModuleConfig()` deep-merge utility (already used for `CampaignPhaseConfig`) to preserve runtime state keys like `start_date`/`end_date` while allowing new config values to override.
+This ensures `meta.total` and `meta.total_pages` accurately reflect the number of campaigns actually returned by the paginated data query.
 
-#### 2. Protect active/completed phase dates and config (`saveWithModules` + `updateWithModules`)
+#### 2. Fix dashboard stats query — `CampaignRepository::findOpenCampaigns`
 
-Added active-phase detection before the phase config update section:
+**File:** `src/Repository/CampaignRepository.php`
 
-```php
-$isPhaseActive = $pcStart && $pcStart <= $now && (!$pcEnd || $pcEnd > $now);
-$isPhaseCompleted = $pcEnd && $pcEnd < $now && $pcStart;
-```
-
-- **Date protection**: `start_date`/`end_date` on `CampaignPhaseConfig` are only updated when the phase is NOT active or completed.
-- **Config date preservation**: For active/completed phases, the merged `module_config` preserves the existing `start_date` and `end_date` keys from the database instead of allowing stale request values to overwrite them.
-
-#### 3. Fix Final Enrollment status lookup (`mapCampaignToDto`)
-
-**Before:**
-```php
-$phasePrevious = $campaign->getCurrentActivePhaseDetails($module->getId() - 1);
-```
-
-**After:**
-```php
-if ($previousModule) {
-    $phasePrevious = $campaign->getCurrentActivePhaseDetails($previousModule->getId());
-}
-```
-
-Uses the already-computed `$previousModule` (found by `sequenceOrder - 1`) instead of fragile ID arithmetic.
-
-#### 4. Module ID enrichment for `updateWithModules`
-
-Pre-processes incoming module data to resolve `CampaignModule` IDs when the frontend sends modules without an explicit `id` but with `module_id` + `bidding_name`:
+Added the `endDate >= :now` condition to the query used by `PMDashboardStatsService` for the header widget:
 
 ```php
-// Enrich modules with IDs if they are missing but match existing modules by module_id and bidding_name
-foreach ($modules as &$moduleData) {
-    if (empty($moduleData['id']) && isset($moduleData['module_id'], $moduleData['bidding_name'])) {
-        foreach ($campaign->getCampaignModules() as $cm) {
-            if (!$cm->isDeleted() &&
-                $cm->getModule()->getId() === (int)$moduleData['module_id'] &&
-                $cm->getBiddingName() === $moduleData['bidding_name']) {
-                $moduleData['id'] = $cm->getId();
-                break;
-            }
-        }
-    }
-}
-unset($moduleData); // prevent reference issues
+return $this->createQueryBuilder('pc')
+    ->where('pc.program IN (:programIds)')
+    ->setParameter('programIds', $programIds)
+    ->andWhere('pc.status = :status')
+    ->setParameter('status', 'open')
+    ->andWhere('pc.endDate >= :now')          // ← added
+    ->setParameter('now', new \DateTime())    // ← added
+    ->andWhere('pc.isDeleted = :isDeleted')
+    ->setParameter('isDeleted', false)
+    ->getQuery()
+    ->getResult();
 ```
 
-Without this enrichment, existing modules sent without an `id` would be treated as **new** modules — creating duplicates and orphaning the original campaign module (along with its phase configs and execution records). This ensures that modules are correctly matched to their existing database records, so the merge and phase-protection logic in changes #1 and #2 can operate on the correct entities.
+This ensures the "Active Campaigns: N / Running now" header stat only counts campaigns that are truly still running.
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `src/Domain/Campaign/Campaign/CampaignService.php` | Merge `module_config` on `CampaignModule` instead of overwriting; protect active/completed phase dates and config from being reset; fix Final Enrollment previous-module lookup to use sequence order. |
+| `src/Domain/Campaign/Campaign/CampaignService.php` | Add `endDate >= :now` filter to the count query builder (`$countQb`) when filtering by `status = 'open'`, aligning it with the data fetch query. |
+| `src/Repository/CampaignRepository.php` | Add `endDate >= :now` filter to `findOpenCampaigns()` used by the PM Dashboard header stats. |
 
 ## Impact
 
-- **Bidding Stability**: Active bidding phases maintain their exact state and persisted data (submitted bids, statistics) even when generic campaign metadata is adjusted mid-cycle.
-- **Correct Progression**: The Simulation phase boundary is protected. Completing a bidding round routes correctly to Simulation without jumping to Final Enrollment.
-- **Backward Compatibility**: No schema modifications. No API contract changes. Updates operate entirely within the phase persistence layer. The `mergeModuleConfig()` utility was already in use — this change extends its usage to `CampaignModule` entities.
+- **Dashboard Header**: "Active Campaigns" count now accurately reflects only campaigns with `status = 'open'` AND `endDate >= NOW()`.
+- **Pagination**: `meta.total` matches the actual number of rows returned, so "Showing X - Y of Z campaigns" is correct on every page.
+- **Backward Compatibility**: No schema changes. No API response shape changes. Purely a query filter alignment fix.
+- **Risk**: Campaigns whose `endDate` has silently passed will no longer appear in active counts. This is the correct behavior — they were already excluded from the paginated list.
 
 ## Testing
 
-- [ ] Start a Bidding phase, place bids (impersonating a student), edit main campaign min/max points in the PM dashboard → Bidding phase remains "Active" and bids are counted correctly.
-- [ ] Close the Bidding phase → Simulation phase correctly opens and waits for user action (no jump to Final Enrollment).
-- [ ] Verify Add/Drop phase statistics correctly reflect bids and enrollments from previous phases (no zero display).
+- [ ] Navigate to the PM Dashboard → Verify the "Active Campaigns" count in the header matches the total number of campaigns visible when paging through the list.
+- [ ] Go to the last page of the active campaigns table → Verify the pagination label ("Showing X - Y of Z") matches the actual number of rows displayed.
+- [ ] Check that campaigns with a past `endDate` but `status = 'open'` are excluded from both the header count and pagination total.
