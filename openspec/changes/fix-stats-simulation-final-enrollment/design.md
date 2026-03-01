@@ -1,19 +1,20 @@
 ## Context
 
-The INSEAD Bidding System's campaign detail view displays statistics (`total_students`, `total_courses`, `total_sections`) for each phase. Programme Managers expect these numbers to be consistent and accurate across all phases.
+The INSEAD Bidding System's campaign detail view displays statistics (`total_students`, `total_courses`, `total_sections`) for each phase. Programme Managers expect these numbers to be consistent and accurate across all phases, and to remain static regardless of search filters applied to the course list.
 
-Three bugs affect accuracy:
+Four bugs affect accuracy:
 1. Final Enrollment uses `countEnrolledStudentsByCampaign()` instead of `getEligibleStudents()` for student count
 2. Simulation returns 0 courses when no bids exist, even though available courses are loaded
 3. Student course queries in Final Enrollment don't filter by `moduleType`, mixing data from other phases
+4. Simulation header stats (`total_sections`) change when search filter is applied — stats should be static
 
 ## Goals / Non-Goals
 
 **Goals:**
 - Fix Final Enrollment `total_students` to use `getEligibleStudents()` — matching all other phases
 - Fix Simulation `getCoursesWithEnrollmentData()` to show available courses when no bids exist
-- Fix Simulation search filter to recalculate totals after filtering
 - Fix student course queries to filter by `moduleType = 'final_enrollment'`
+- Fix Simulation statistics to be static — `total_courses` and `total_sections` must NOT change when a search filter is applied
 
 **Non-Goals:**
 - No changes to bidding workflow or simulation algorithm
@@ -43,19 +44,37 @@ $totalStudents = count($eligibleStudents);
 
 `$biddingConfig` and `$biddingPhaseConfigId` are already computed at lines 1227-1229. This uses the bidding round config intentionally — Final Enrollment represents the same student pool as the bidding phase.
 
-### 2. Simulation Course Count Fix
+### 2. Simulation Stats Must Be Static (Not Affected by Search Filter)
 
 **Location**: `SimulationDashboardService::getCoursesWithEnrollmentData()`
 
-**Problem**: `totalCourses` and `totalSections` were calculated AFTER the `if (empty($courseIds))` early return, so when no bids existed, the method returned 0 for everything.
+**Problem**: `$totalSections` is recalculated after the search filter is applied (lines 482-495), so when the user types a search term, the header statistics change from e.g. "232 (3142)" to "232 (66)". Meanwhile `$totalCoursesBeforeSearch` is correctly saved before search and stays static.
 
 **Fix**:
-- Move `totalCourses`/`totalSections` calculation BEFORE the empty check
-- Change early return logic: only return 0 when BOTH `$courseIds` is empty AND `$totalCourses` is 0
-- When `$courseIds` is empty but courses exist, log info and continue showing all available courses
-- Add `total_sections` key to empty return response for consistency
+- Save `$totalSectionsBeforeSearch` at line 473 (alongside `$totalCoursesBeforeSearch`), capturing the total section count BEFORE any search filtering
+- Return `$totalSectionsBeforeSearch` as the `total_sections` in the response (used for the statistics header)
+- The search filter should only recalculate totals for pagination purposes (`$totalCourses` for `pagination.total` and `$totalPages`)
+- `$totalSections` after search is only needed for pagination context, NOT for creating the statistics header
 
-**Search filter fix**: After applying search filter on `$availableCourses`, recalculate `$totalCourses` and `$totalSections` from the filtered set (previously `$totalCourses` was calculated after pagination slice).
+**Data flow after fix**:
+```
+getCoursesWithEnrollmentData() returns:
+  'total'          => $totalCoursesBeforeSearch   (static, for statistics header)
+  'total_sections' => $totalSectionsBeforeSearch  (static, for statistics header)
+  'pagination'     => [
+      'total' => $totalCourses                    (filtered, for pagination)
+      ...
+  ]
+```
+
+`getDashboardData()` uses:
+```php
+$statistics = [
+    'total_courses'  => $coursesResult['total'],           // static ✅
+    'total_sections' => $coursesResult['total_sections'],  // now static ✅
+    'total_students' => count(getEligibleStudents(...)),   // static ✅
+];
+```
 
 ### 3. moduleType Filter Fix
 
@@ -69,5 +88,6 @@ This ensures only bids from the Final Enrollment phase are returned when viewing
 ## Risks / Trade-offs
 
 - **Minimal risk**: All fixes are isolated to specific query methods. `getEligibleStudents()` is already proven across 4 other phases.
-- **No performance concern**: `getEligibleStudents()` is already called in every other phase. SimulationDashboardService just reorders existing calculations.
+- **No performance concern**: `getEligibleStudents()` is already called in every other phase. SimulationDashboardService just saves an extra variable before search.
 - **Edge case**: If student filters differ between phases, Final Enrollment will always reflect the bidding round's student pool — this is the desired behavior.
+- **Search UX**: The course list and pagination will still reflect filtered results. Only the header statistics remain static, which is the expected behavior matching the existing dashboard pattern.

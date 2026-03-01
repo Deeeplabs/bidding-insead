@@ -17,18 +17,32 @@
     ```
   - **Note**: `$biddingConfig` and `$biddingPhaseConfigId` are already computed at lines 1227-1229.
 
-## 2. Fix Simulation Course Count
+## 2. Fix Simulation Stats to Be Static (Not Affected by Search Filter)
 
-- [x] 2.1 In `SimulationDashboardService::getCoursesWithEnrollmentData()`, move `totalCourses` and `totalSections` calculation BEFORE the empty `$courseIds` check
+- [x] 2.1 In `SimulationDashboardService::getCoursesWithEnrollmentData()`, save `$totalSectionsBeforeSearch` before search filtering
   - **File**: `bidding-api/src/Domain/Simulation/Service/SimulationDashboardService.php`
-  - Calculate `totalCourses` from `count($availableCourses)` and `totalSections` by iterating class promotions BEFORE checking `if (empty($courseIds))`
-  - Change early return: only return 0 when both `$courseIds` is empty AND `$totalCourses` is 0
-  - When no bids but courses exist, log info and continue to show all available courses
-  - Add `total_sections: 0` to empty return response for consistency
+  - At line 473, alongside `$totalCoursesBeforeSearch = count($availableCourses)`, add:
+    ```php
+    $totalSectionsBeforeSearch = $totalSections;
+    ```
+  - This captures the total section count BEFORE the search filter is applied
 
-- [x] 2.2 Fix search filter recalculation in `getCoursesWithEnrollmentData()`
-  - After applying search filter on `$availableCourses`, recalculate `$totalCourses` and `$totalSections` from the filtered set
-  - Remove the post-pagination `$totalCourses = count($availableCourses)` line (it was too late)
+- [x] 2.2 Return `$totalSectionsBeforeSearch` instead of `$totalSections` in the response
+  - **File**: `bidding-api/src/Domain/Simulation/Service/SimulationDashboardService.php`
+  - In the return statement (~line 641), change:
+    ```php
+    'total_sections' => $totalSections
+    ```
+  - To:
+    ```php
+    'total_sections' => $totalSectionsBeforeSearch
+    ```
+  - This ensures the statistics header shows a static section count unaffected by search
+
+- [x] 2.3 Verify `getDashboardData()` statistics block uses static values
+  - **File**: `bidding-api/src/Domain/Simulation/Service/SimulationDashboardService.php`
+  - Confirm at lines 104-109 that `statistics` reads from `$coursesResult['total']` (courses) and `$coursesResult['total_sections']` (sections) — both now static
+  - `total_students` already uses `getEligibleStudents()` directly — also static ✅
 
 ## 3. Fix moduleType Filters in Final Enrollment Queries
 
@@ -44,8 +58,8 @@
 
 - [x] 4.1 Code-verify all 5 phase builders use `getEligibleStudents()` for student count
 - [x] 4.2 Code-verify SimulationDashboardService calculates totals before empty check
-- [x] 4.3 Code-verify search filter recalculates totals after filtering
+- [x] 4.3 Code-verify `total_sections` in response uses `$totalSectionsBeforeSearch` (static value)
 - [x] 4.4 Code-verify student course queries include moduleType filter
-- [ ] 4.5 Manual test: Create campaign and verify all phases show same student count
-- [ ] 4.6 Manual test: Verify Simulation shows courses immediately after campaign creation
-- [ ] 4.7 Manual test: Compare stats across all phases after students submit bids and do add/drop
+- [ ] 4.5 Manual test: Verify Simulation stats header does NOT change when typing a search term
+- [ ] 4.6 Manual test: Verify course list and pagination DO change when typing a search term
+- [ ] 4.7 Manual test: Verify all phases show same student count

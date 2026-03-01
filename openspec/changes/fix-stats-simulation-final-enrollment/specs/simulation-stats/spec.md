@@ -18,12 +18,14 @@ The system SHALL display accurate `total_courses` and `total_sections` counts in
 - **THEN** `totalCourses` and `totalSections` SHALL already be calculated from `$availableCourses`
 - **AND** the method SHALL NOT return early with 0 if available courses exist
 
-#### Scenario: Search filter recalculates totals correctly
-- **GIVEN** the Programme Manager applies a search filter on courses
-- **WHEN** the search filter reduces the available courses
-- **THEN** `totalCourses` SHALL be recalculated from the filtered course set
-- **AND** `totalSections` SHALL be recalculated from the filtered course set
-- **AND** pagination SHALL use the recalculated `totalCourses`
+#### Scenario: Statistics remain static when search filter is applied
+- **GIVEN** the Programme Manager views the Simulation phase with statistics showing e.g. Courses: 232 (3142), Students: 468
+- **WHEN** the Programme Manager types a search term (e.g. "j") in the search filter
+- **THEN** `total_courses` in the statistics header SHALL remain unchanged (e.g. 232)
+- **AND** `total_sections` in the statistics header SHALL remain unchanged (e.g. 3142)
+- **AND** `total_students` in the statistics header SHALL remain unchanged (e.g. 468)
+- **AND** the course list below SHALL be filtered to show only matching courses
+- **AND** the pagination SHALL reflect the filtered course count
 
 #### Scenario: Empty return includes total_sections
 - **GIVEN** both `$courseIds` and `$availableCourses` are empty
