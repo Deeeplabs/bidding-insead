@@ -1,47 +1,38 @@
-## ADDED Requirements
+## CHANGED Requirements
 
-### Requirement: Final Enrollment phase displays accurate student count
-The system SHALL display the accurate total number of students enrolled in the Final Enrollment phase for a specific campaign and module.
+### Requirement: Final Enrollment phase displays same student count as Bidding Round
 
-#### Scenario: View final enrollment statistics after campaign creation
-- **GIVEN** a campaign has been created and has progressed through bidding and simulation
-- **WHEN** the Programme Manager navigates to the Final Enrollment phase detail view
-- **THEN** the displayed student count SHALL match the actual number of students who completed enrollment (status SELECTED or ENROLLED) in this specific Final Enrollment phase
+The system SHALL display the same `total_students` count in all campaign phases. This count represents eligible students for the campaign, NOT students who have performed a specific action.
 
-#### Scenario: Student count filters by campaign module
-- **GIVEN** a campaign has multiple bidding rounds with different modules
-- **WHEN** viewing Final Enrollment statistics for a specific module
-- **THEN** the student count SHALL only include students enrolled in THAT specific Final Enrollment module
-- **NOTE**: This is critical - counting all enrolled students across all modules would be incorrect
+#### Scenario: Student count matches Bidding Round
+- **GIVEN** a campaign has progressed to the Final Enrollment phase
+- **WHEN** the Programme Manager views Final Enrollment statistics
+- **THEN** the `total_students` SHALL equal the count from `CampaignStudentEligibilityService::getEligibleStudents()` using the bidding round config
+- **AND** this count SHALL be identical to the Bidding Round's `total_students`
 
-#### Scenario: Student count reflects final enrollment status
-- **GIVEN** students have completed the enrollment process
-- **WHEN** calculating the final enrollment student count
-- **THEN** the count SHALL include all students who have successfully enrolled in courses (status SELECTED or ENROLLED)
+#### Scenario: Student count is independent of bid activity
+- **GIVEN** a campaign has 100 eligible students
+- **AND** only 80 students have submitted bids
+- **AND** only 60 students have ENROLLED/SELECTED status
+- **WHEN** viewing Final Enrollment statistics
+- **THEN** `total_students` SHALL be 100 (all eligible students, not 60 enrolled)
 
-### Requirement: Final Enrollment phase displays accurate course count
-The system SHALL display the accurate total number of courses/classes available in the Final Enrollment phase for a specific campaign and module.
+#### Scenario: Student count is independent of add/drop activity
+- **GIVEN** a campaign has eligible students
+- **AND** some students have performed add/drop operations
+- **WHEN** viewing Final Enrollment statistics
+- **THEN** `total_students` SHALL remain the same as in the Bidding Round phase
 
-#### Scenario: View course count in final enrollment
-- **GIVEN** a campaign has reached the Final Enrollment phase
-- **WHEN** the Programme Manager views the Final Enrollment statistics
-- **THEN** the displayed course count SHALL match the number of classes in the campaign configuration for this module
+### Requirement: Student course queries filter by moduleType
 
-#### Scenario: Course count reflects final enrollment configuration
-- **GIVEN** a campaign has been configured with courses for the Final Enrollment phase
-- **WHEN** viewing final enrollment statistics
-- **THEN** the course count SHALL reflect the courses defined in the CampaignModule for the Final Enrollment module
+The system SHALL only return bids from the Final Enrollment phase when querying student courses.
 
-### Requirement: Statistics update correctly after campaign operations
-The system SHALL ensure final enrollment statistics are consistent after campaign creation and modification operations.
+#### Scenario: Student courses show only final enrollment bids
+- **GIVEN** a student has bids in bidding_round, add_drop, and final_enrollment phases
+- **WHEN** viewing the student's courses in Final Enrollment
+- **THEN** only bids with `moduleType = 'final_enrollment'` SHALL be returned
 
-#### Scenario: Statistics refresh after campaign save
-- **GIVEN** a Programme Manager creates or edits a campaign
-- **WHEN** the campaign is saved successfully
-- **AND** the Programme Manager navigates to the Final Enrollment phase
-- **THEN** the statistics SHALL load with accurate current data
-
-#### Scenario: No stale data in final enrollment statistics
-- **GIVEN** multiple campaign operations have been performed
-- **WHEN** viewing final enrollment statistics
-- **THEN** the displayed data SHALL reflect the most recent state, not cached outdated values
+#### Scenario: Student enrolled courses show only final enrollment enrollments
+- **GIVEN** a student has enrolled courses from multiple phases
+- **WHEN** viewing the student's enrolled courses in Final Enrollment
+- **THEN** only enrollments with `moduleType = 'final_enrollment'` SHALL be returned

@@ -2,61 +2,98 @@
 
 ## Problem
 
-The "Simulation" and "Final Enrollment" phases in the campaign detail bidding view were displaying inaccurate counts for the number of students and courses. This data inconsistency occurred after creating or editing a campaign and directly impacted Programme Managers' ability to make informed decisions during the bidding lifecycle.
+The "Simulation" and "Final Enrollment" phases in the campaign detail view were displaying incorrect student counts. The expectation is that the `total_students` statistic should be **the same across all phases** (Bidding Round → Simulation → Add/Drop → Final Enrollment), since it represents the number of eligible students in the campaign — regardless of whether students submit bids, do add/drop, or not.
 
-After initial fixes were applied, testing revealed that Simulation and Final Enrollment stats still did not match Bidding Round phase stats. This required additional investigation and fixes.
+### Root Cause
 
-### Root Cause Analysis
+**1. Final Enrollment Student Count (Primary Issue)**
 
-1. **Simulation Statistics Bug (Initial Fix):** The `SimulationDashboardService::getCoursesWithEnrollmentData` method was returning early with `total: 0` when no bids existed, even though available courses were already loaded. This caused the Simulation phase to show 0 courses and 0 sections immediately after campaign creation.
+In `AdminCampaignDetailService::buildFinalEnrollmentDetail()`, the student count was using a completely different method than all other phases:
 
-2. **Final Enrollment Statistics Bug (Initial Fix):** The backend was counting eligible students instead of enrolled students (status SELECTED or ENROLLED), resulting in inflated enrollment numbers.
+| Phase | Method Used | What It Counted |
+|---|---|---|
+| Pre-Bidding | `getEligibleStudents()` | ✅ All eligible students |
+| Bidding Round | `getEligibleStudents()` | ✅ All eligible students |
+| Simulation | `getEligibleStudents()` | ✅ All eligible students |
+| Add/Drop | `getEligibleStudents()` | ✅ All eligible students |
+| **Final Enrollment** | `countEnrolledStudentsByCampaign()` | ❌ Only students with SELECTED/ENROLLED bid status |
 
-3. **Final Enrollment Statistics Bug (Revised Fix - After Testing):** The `countEnrolledStudentsByCampaign()` method was NOT filtering by `campaignModule`, causing it to count ALL students with SELECTED/ENROLLED status across ALL modules in just those in the specific the campaign, not Final Enrollment phase. This caused stats to not match Bidding Round baseline.
+This meant Final Enrollment showed a **smaller** number than Bidding Round because it only counted students who had actually been enrolled, not all eligible students.
+
+**2. Simulation Course Count (Previous Fix)**
+
+The `SimulationDashboardService::getCoursesWithEnrollmentData()` method was returning early with `total: 0` when no bids existed (`$courseIds` was empty), even though available courses were already loaded. This caused the Simulation phase to show 0 courses and 0 sections immediately after campaign creation.
+
+**3. Student Course Queries Missing moduleType Filter**
+
+The `getStudentCourses()` and `getStudentEnrolledCourses()` methods in `AdminCampaignDetailService` were not filtering by `moduleType = 'final_enrollment'`, which could return bids from other phases.
 
 ## Solution
 
-### Changes Made
+### File 1: `src/Domain/Dashboard/Campaign/AdminCampaignDetailService.php`
 
-**File 1: `src/Repository/BidRepository.php`**
-- Modified `countEnrolledStudentsByCampaign()` to accept an optional `$campaignModuleId` parameter
-- When `$campaignModuleId` is provided, the query now filters by that specific module
-- This ensures Final Enrollment only counts students enrolled in that specific phase
+**Change 1 — Fix Final Enrollment student count (buildFinalEnrollmentDetail)**
+- Replaced `$this->bidRepository->countEnrolledStudentsByCampaign()` with `$this->campaignStudentEligibilityService->getEligibleStudents()`
+- Uses the bidding round config (`$biddingConfig`, `$biddingPhaseConfigId`) which is already computed in the method
+- This makes Final Enrollment use the exact same student counting logic as all other phases
 
-**File 2: `src/Domain/Simulation/Service/SimulationDashboardService.php`**
-- Fixed the `getCoursesWithEnrollmentData` method to calculate `totalCourses` and `totalSections` from `$availableCourses` BEFORE checking if `$courseIds` is empty
-- When no bids exist but available courses exist, the method now continues to show all available courses instead of returning early with 0
-- Added proper handling for search filter - recalculates totals after applying search filter
-- Added logging for better debugging when no courses are found
+```php
+// BEFORE (wrong — counted only enrolled students):
+$totalStudents = $this->bidRepository->countEnrolledStudentsByCampaign($campaign->getId(), $campaignModuleId);
 
-**File 3: `src/Domain/Dashboard/Campaign/AdminCampaignDetailService.php`**
-- Updated `buildFinalEnrollmentDetail()` to pass `campaignModuleId` to the count method
-- This ensures Final Enrollment stats filter by the specific module being viewed
+// AFTER (correct — counts all eligible students, same as Bidding Round):
+$eligibleStudents = $this->campaignStudentEligibilityService->getEligibleStudents(
+    $campaign,
+    $biddingConfig,
+    $biddingPhaseConfigId
+);
+$totalStudents = count($eligibleStudents);
+```
+
+**Change 2 — Add moduleType filter to getStudentCourses()**
+- Added `b.moduleType = 'final_enrollment'` filter to the student courses query
+- Ensures only final enrollment bids are returned when viewing student course details
+
+**Change 3 — Add moduleType filter to getStudentEnrolledCourses()**
+- Added `b.moduleType = 'final_enrollment'` filter to the enrolled courses query
+- Ensures only final enrollment enrolled courses are returned
+
+### File 2: `src/Domain/Simulation/Service/SimulationDashboardService.php`
+
+**Change 1 — Fix early return when no bids exist (getCoursesWithEnrollmentData)**
+- Moved `totalCourses` and `totalSections` calculation BEFORE the empty `$courseIds` check
+- When no bids exist but available courses exist, the method now shows all available courses instead of returning 0
+- Added `total_sections` key to the empty return response for consistency
+
+**Change 2 — Fix search filter recalculation**
+- After applying search filter on `$availableCourses`, now recalculates `$totalCourses` and `$totalSections`
+- Previously, `$totalCourses` was calculated after pagination slice which gave wrong total
+
+**Change 3 — Improved logging**
+- Changed warning to info when no bids exist but courses are available (not an error condition)
+- Added `available_courses` count to log message for debugging
 
 ## Files Changed
 
-| File | Change |
-|------|--------|
-| `src/Repository/BidRepository.php` | Added optional `$campaignModuleId` parameter to filter students by specific module |
-| `src/Domain/Simulation/Service/SimulationDashboardService.php` | Fixed early return bug to show available courses when no bids exist |
-| `src/Domain/Dashboard/Campaign/AdminCampaignDetailService.php` | Fixed to pass `campaignModuleId` to count enrolled students |
+| File | Changes |
+|------|---------|
+| `src/Domain/Dashboard/Campaign/AdminCampaignDetailService.php` | Fixed Final Enrollment student count to use `getEligibleStudents()`; Added `moduleType` filter to student course queries |
+| `src/Domain/Simulation/Service/SimulationDashboardService.php` | Fixed early return bug; Fixed search filter recalculation; Improved logging |
 
 ## Impact
 
-* **User Experience:** Programme Managers can now see accurate course and student counts immediately after creating a campaign, during both Simulation and Final Enrollment phases
-* **Data Accuracy:** Statistics now correctly reflect available courses regardless of bid activity, and enrollment counts reflect actual enrollments in the specific phase
-* **Consistency:** Final Enrollment stats now match Bidding Round baseline by properly filtering by campaign module
-* **No Breaking Changes:** The fixes maintain backward compatibility with existing API contracts
+- **Student Count Consistency:** All phases (Pre-Bidding, Bidding Round, Simulation, Add/Drop, Final Enrollment) now show the same `total_students` value
+- **Simulation Courses:** Simulation phase correctly shows available courses even when no bids exist yet
+- **Data Accuracy:** Student course queries in Final Enrollment are now properly scoped to `moduleType = 'final_enrollment'`
+- **No Breaking Changes:** No API contract changes — same response fields, just corrected values
+- **No Migration Required:** No database schema changes
 
 ## Testing
 
-Verified through code review and implementation:
-- [x] Fixed early return logic in SimulationDashboardService to show available courses when no bids exist
-- [x] Verified totalCourses and totalSections are calculated before empty check
-- [x] Confirmed search filter properly recalculates totals
-- [x] Fixed BidRepository to accept optional campaignModuleId parameter for filtering
-- [x] Fixed AdminCampaignDetailService to pass campaignModuleId to count method
-- [ ] Manual testing required: Create new campaign and verify Simulation shows correct course count
-- [ ] Manual testing required: Verify Final Enrollment shows correct enrollment counts (should match Bidding Round)
-- [ ] Manual testing required: Test after campaign editing to ensure statistics update correctly
-- [ ] Manual testing required: Compare stats across all three phases (Bidding Round, Simulation, Final Enrollment) for consistency
+- [x] Code-verified: All 5 phase builders use `getEligibleStudents()` for student count
+- [x] Code-verified: SimulationDashboardService calculates totals before empty check
+- [x] Code-verified: Search filter recalculates totals after filtering
+- [x] Code-verified: Student course queries include moduleType filter
+- [ ] Manual test: Create campaign and verify all phases show same student count
+- [ ] Manual test: Verify Simulation shows courses immediately after campaign creation
+- [ ] Manual test: Compare stats across all phases after students submit bids and do add/drop
