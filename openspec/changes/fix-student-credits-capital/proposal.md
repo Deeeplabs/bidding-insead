@@ -13,7 +13,8 @@ This causes confusion for PMs and students who see negative capital or incorrect
 - **Fix Capital Left Calculation**: Add `max(0, ...)` guard in `StudentCapitalService::getCapital()` so `capital_left` is never negative
 - **Fix Capital Left in Bidding Round View**: Add `max(0, ...)` guard in `CampaignToActiveBiddingRoundDtoMapper::buildBiddingRoundModuleData()` for the per-module capital_left calculation
 - **Fix Credits Left Placeholder**: Replace the hardcoded `left: 1` in `StudentCreditService::getCredits()` with a proper calculation
-- **Maintain existing** `max(0, ...)` guard for `credits_to_be_fulfilled` in `StudentStatsService` (already correct)
+- **Fix Credits To Be Fulfilled**: Update calculation in `StudentStatsService` to properly subtract credits_earned from credits granted and clamp to zero using `max(0, ...)`
+- **Match PM List With Dashboard**: Update `StudentListToDtoMapper`, `StudentToDtoMapper`, and `StudentDataToDtoMapper` to dynamically compute and map `credits_to_be_fulfilled` and `capital_left`, and refactor `StudentService::listStudents` to apply computed sorting and filtering for `capital_left` instead of stale DB values.
 
 The frontend (bidding-web) expects these existing fields:
 - capital_spent
@@ -37,7 +38,10 @@ Only backend calculation logic needs to be fixed - no DTO or frontend changes re
 - **StudentCapitalService.php** (line 44): Add `max(0, ...)` to `left` calculation in `getCapital()`
 - **StudentCreditService.php** (line 60): Replace hardcoded `left: 1` with proper calculation
 - **CampaignToActiveBiddingRoundDtoMapper.php** (line 402): Add `max(0, ...)` to `capital_left` in bidding round module
-- **StudentStatsService.php**: Already correct — `credits_to_be_fulfilled` uses `max(0, ...)`
+- **StudentStatsService.php**: Fixed `credits_to_be_fulfilled` calculation to subtract `credits_earned` from credits granted, wrapped in `max(0, ...)`
+- **StudentListToDtoMapper.php** / **StudentToDtoMapper.php**: Replaced legacy `credits` logic with `credits_to_be_fulfilled` computation.
+- **StudentDataToDtoMapper.php**: Injected `StudentCapitalService` to map dynamically computed `capital_left` into `remaining_capital` instead of using stale static DB values.
+- **StudentService.php**: Refactored `listStudents` pagination querying to dynamically sort and filter the `capital_left` rather than rely on the obsolete `COALESCE(sd.remainingCapital, 0)` SQL execution.
 - **BidRepository**: Used to find campaigns student has participated in (already in place)
 
 ### bidding-web (Student Portal)

@@ -15,6 +15,8 @@ The student dashboard, student detail/list views, and bidding round module views
 
 3. **Credits Left (Hardcoded Placeholder):** `StudentCreditService::getCredits()` returns a hardcoded `left: 1` instead of an actual calculation, causing incorrect credit information across all consumers.
 
+4. **PM Student List Discrepancy:** The PM dashboard student list was rendering legacy data mapped using stale database scalar fields (`student_data.remaining_capital`, `creditTaken`) which don't dynamically compute campaign credits and capital accumulation, causing mismatched data against the individual student dashboard.
+
 ## Solution
 
 Added `max(0, ...)` guards at all calculation points to ensure values are never negative, and replaced the hardcoded credits placeholder with a proper calculation.
@@ -35,6 +37,19 @@ Added `max(0, ...)` guards at all calculation points to ensure values are never 
    - Changed: `left: 1` (hardcoded placeholder) → `left: max(0, $totalCredits->getTotal() - $totalCreditsEarned)`
    - Now properly calculates remaining credits to take, clamped to zero
 
+4. **`src/Domain/Student/Dashboard/StudentStatsService.php`**
+   - Fixed credits_to_be_fulfilled calculation to subtract credits_earned from credits granted
+   - Added proper calculation: credits_to_be_fulfilled = max(0, credits_granted - credits_earned)
+
+5. **`src/Domain/Student/Mapper/StudentListToDtoMapper.php` & `StudentToDtoMapper.php`**
+   - Swapped out legacy `credits` mapped field logic with dynamic `credits_to_be_fulfilled` calculation leveraging `StudentCreditService`.
+
+6. **`src/Domain/Student/StudentData/Mapper/StudentDataToDtoMapper.php`**
+   - Injected `StudentCapitalService` in order to dynamically map the true remaining capital output into the DTO instead of relying solely on the static `remainingCapital` column.
+
+7. **`src/Domain/Student/StudentService.php`**
+   - Refactored student list array processing and paginated calculation sorting filters so that `capital_left` and `credits` use real-time PHP computation to handle PM dashboard queries instead of relying on obsolete `COALESCE(sd.remainingCapital)` SQL execution.
+
 ## Files Changed
 
 | File | Change |
@@ -42,6 +57,11 @@ Added `max(0, ...)` guards at all calculation points to ensure values are never 
 | `src/Domain/Student/StudentCapitalService.php` | Add `max(0, ...)` guard to `capital_left` calculation |
 | `src/Domain/Campaign/ActiveCampaign/Mapper/CampaignToActiveBiddingRoundDtoMapper.php` | Add `max(0, ...)` guard to per-module `capital_left` |
 | `src/Domain/Student/StudentCreditService.php` | Replace hardcoded `left: 1` with proper calculation |
+| `src/Domain/Student/Dashboard/StudentStatsService.php` | Fixed credits_to_be_fulfilled calculation |
+| `src/Domain/Student/Mapper/StudentListToDtoMapper.php` | Remap legacy credits fields |
+| `src/Domain/Student/Mapper/StudentToDtoMapper.php` | Remap legacy credits fields |
+| `src/Domain/Student/StudentData/Mapper/StudentDataToDtoMapper.php` | Map dynamic computed remaining capital |
+| `src/Domain/Student/StudentService.php` | Refactor PM List dynamic sorting & filtering logic |
 
 ## Impact
 
@@ -60,3 +80,4 @@ Verified through code review:
 - [x] `credits_to_be_fulfilled` already uses `max(0, ...)` in `StudentStatsService` (unchanged, already correct)
 - [x] Backend-only changes — no frontend modifications needed
 - [x] Backward compatible with existing API consumers — same field names, values only become non-negative
+- [x] PM Dashboard matches individual student dashboard down to decimal sorting

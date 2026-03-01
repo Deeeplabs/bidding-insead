@@ -14,7 +14,7 @@ The frontend expects existing fields (capital_spent, capital_left, credits_earne
 - Ensure `capital_left` is never negative across ALL code paths (dashboard stats, student detail, student list, bidding round module)
 - Fix the hardcoded `left: 1` credits placeholder in `StudentCreditService`
 - Maintain backward compatibility with existing API response shape
-- Keep existing `max(0, ...)` guards where already present (`StudentStatsService`, `StudentCreditService::getCredits()` for `toBeFulfilled`)
+- Fix `credits_to_be_fulfilled` calculation in `StudentStatsService` to correctly use `max(0, credits_granted - credits_earned)`
 
 **Non-Goals:**
 - No changes to frontend (bidding-web)
@@ -38,6 +38,16 @@ The frontend expects existing fields (capital_spent, capital_left, credits_earne
 **Decision**: Replace hardcoded `left: 1` in `StudentCreditService::getCredits()` (line 60) with a proper calculation based on `totalCredits - totalCreditsEarned`, clamped to `max(0, ...)`.
 
 **Rationale**: The `left` field in `StudentCredit` model should represent remaining credits available. The hardcoded `1` appears to be a placeholder from initial development.
+
+### 4. Credits To Be Fulfilled — Proper Calculation
+**Decision**: Fix calculation in `StudentStatsService` to subtract `credits_earned` from `credits_granted` and use `max(0, ...)`.
+
+**Rationale**: The previous logic didn't properly compute the remaining credits to be fulfilled based on what was actually granted and earned.
+
+### 5. PM Student List Match Strategy
+**Decision**: Refactor `StudentService::listStudents` mapping to use the dynamically computed `credits_to_be_fulfilled` (`Credits` column) and `capital->getLeft()` (`Capital Left` column). Further, inject `StudentCapitalService` into `StudentDataToDtoMapper` and migrate querying logic to handle these fields as computed data instead of pure SQL sorting over `sd.remainingCapital` and `sd.creditTaken`.
+
+**Rationale**: The PM Dashboard student list UI was sourcing values from old DTO shapes mapping and the original, stale `StudentData` flat fields. By forcing PHP-level computation before filtering/sorting matching, we guarantee the PM list columns match the student's individual dashboard down to the decimal.
 
 ## Risks / Trade-offs
 
