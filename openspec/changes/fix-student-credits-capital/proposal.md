@@ -1,11 +1,19 @@
 ## Why
 
-The student dashboard header currently does not accurately reflect what has been granted to students or what has been spent/fulfilled during bidding cycles. This causes confusion for PMs and students who need accurate, real-time insight into bidding activity.
+The student dashboard and bidding round views can currently display **negative values** for capital_left and credits. This occurs because:
+
+1. **Root Cause (Capital)**: `StudentCapitalService::getCapital()` computes `left = capital - spent` without clamping to zero. If a student spends more capital than granted (e.g., across multiple campaigns or via manual adjustments), the result goes negative.
+2. **Root Cause (Credits)**: `StudentCreditService::getCredits()` has a hardcoded `left: 1` placeholder instead of a proper calculation, and the `toBeFulfilled` field internally already uses `max(0, ...)` but the model's `left` value is incorrect.
+3. **Root Cause (Bidding Round View)**: `CampaignToActiveBiddingRoundDtoMapper` computes `capital_left = capitalGranted - cumulativePoints` without clamping, allowing negative capital display in active bidding round views.
+
+This causes confusion for PMs and students who see negative capital or incorrect credit values on their dashboards.
 
 ## What Changes
 
-- **Fix Capital Left Calculation**: Make capital_left calculation dynamically based on the accumulation of capital from campaigns participated, plus manual adjustments, minus spent capital
-- **Fix Credits to be Fulfilled Calculation**: Make credits_to_be_fulfilled calculation based on minimum credits from campaigns the student participated in, minus credits earned
+- **Fix Capital Left Calculation**: Add `max(0, ...)` guard in `StudentCapitalService::getCapital()` so `capital_left` is never negative
+- **Fix Capital Left in Bidding Round View**: Add `max(0, ...)` guard in `CampaignToActiveBiddingRoundDtoMapper::buildBiddingRoundModuleData()` for the per-module capital_left calculation
+- **Fix Credits Left Placeholder**: Replace the hardcoded `left: 1` in `StudentCreditService::getCredits()` with a proper calculation
+- **Maintain existing** `max(0, ...)` guard for `credits_to_be_fulfilled` in `StudentStatsService` (already correct)
 
 The frontend (bidding-web) expects these existing fields:
 - capital_spent
@@ -18,7 +26,7 @@ Only backend calculation logic needs to be fixed - no DTO or frontend changes re
 ## Capabilities
 
 ### New Capabilities
-- `student-dashboard-stats`: Fix calculation of capital and credits based on campaign participation accumulation
+- `student-dashboard-stats`: Fix calculation of capital and credits to prevent negative values, using campaign participation accumulation
 
 ### Modified Capabilities
 <!-- No spec-level changes - implementation fix within existing dashboard functionality -->
@@ -26,10 +34,11 @@ Only backend calculation logic needs to be fixed - no DTO or frontend changes re
 ## Impact
 
 ### bidding-api (Backend)
-- **StudentStatsService.php**: Uses updated calculation logic
-- **StudentCapitalService.php**: Modified to calculate capital from Campaign.minCapitalGranted (accumulated from participated campaigns) + Adjustment, minus spent
-- **StudentCreditService.php**: Modified to calculate credits_to_be_fulfilled from Campaign.minCreditsToFulfill (accumulated from participated campaigns)
-- **BidRepository**: Used to find campaigns student has participated in
+- **StudentCapitalService.php** (line 44): Add `max(0, ...)` to `left` calculation in `getCapital()`
+- **StudentCreditService.php** (line 60): Replace hardcoded `left: 1` with proper calculation
+- **CampaignToActiveBiddingRoundDtoMapper.php** (line 402): Add `max(0, ...)` to `capital_left` in bidding round module
+- **StudentStatsService.php**: Already correct — `credits_to_be_fulfilled` uses `max(0, ...)`
+- **BidRepository**: Used to find campaigns student has participated in (already in place)
 
 ### bidding-web (Student Portal)
 - **No changes required** - uses existing API response fields
@@ -39,3 +48,4 @@ Only backend calculation logic needs to be fixed - no DTO or frontend changes re
 
 ### Migration Risk
 - Low - only calculation logic changes, no schema changes
+- No breaking changes to API response shape (fields remain the same, values become non-negative)

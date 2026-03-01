@@ -1,23 +1,22 @@
-# Implementation Tasks - Student Dashboard Stats (Backend Fix Only)
+# Implementation Tasks — Fix Student Credits & Capital (Non-Negative Values)
 
-## 1. Backend - Fix Capital and Credits Calculation
+## 1. Backend — Fix Capital and Credits Calculations
 
-- [x] 1.1 Review existing StudentStatsController.php
-- [x] 1.2 Review existing StudentStatsDto.php (no changes needed - existing fields used)
-- [x] 1.3 Review existing StudentStatsService.php
-- [x] 1.4 Modify StudentCapitalService to calculate capital from Campaign.minCapitalGranted via Bid entity
-- [x] 1.5 Modify StudentCreditService to calculate credits_to_be_fulfilled from Campaign.minCreditsToFulfill via Bid entity
-- [x] 1.6 Add BidRepository to StudentCapitalService
-- [ ] 1.7 Test API endpoint manually with curl to verify response
+- [x] 1.1 Fix `StudentCapitalService::getCapital()` — add `max(0, $capital - $spent)` guard at line 44 in `bidding-api/src/Domain/Student/StudentCapitalService.php`
+- [x] 1.2 Fix `CampaignToActiveBiddingRoundDtoMapper::buildBiddingRoundModuleData()` — add `max(0, $capitalGranted - $cumulativePoints)` guard at line 402 in `bidding-api/src/Domain/Campaign/ActiveCampaign/Mapper/CampaignToActiveBiddingRoundDtoMapper.php`
+- [x] 1.3 Fix `StudentCreditService::getCredits()` — replace hardcoded `left: 1` with `max(0, $totalCredits->getTotal() - $totalCreditsEarned)` at line 60 in `bidding-api/src/Domain/Student/StudentCreditService.php`
 
 ## 2. Manual Verification
 
-- [ ] 2.1 Test with student having single campaign - verify capital_left calculation
-- [ ] 2.2 Test with student having multiple campaigns - verify accumulation
-- [ ] 2.3 Test with manual capital adjustment - verify adjustment is included
-- [ ] 2.4 Test during pre-bidding phase - verify spent fields are 0
-- [ ] 2.5 Test after simulation - verify credits_to_be_fulfilled calculation
-- [ ] 2.6 Test backward compatibility - existing API consumers work without changes
+- [ ] 2.1 Test dashboard stats endpoint (`GET /student/dashboard/stats`) — verify capital_left is >= 0
+- [ ] 2.2 Test student capital endpoint (`GET /student/capital`) — verify capital left is >= 0
+- [ ] 2.3 Test active bidding round endpoint — verify module capital_left is >= 0
+- [ ] 2.4 Test with student having single campaign — verify capital_left and credits calculations
+- [ ] 2.5 Test with student having multiple campaigns — verify accumulation works correctly
+- [ ] 2.6 Test with manual capital adjustment — verify adjustment is included in capital_left
+- [ ] 2.7 Test with student who has overspent capital — verify capital_left shows 0, not negative
+- [ ] 2.8 Test with student who has over-fulfilled credits — verify credits_to_be_fulfilled shows 0, not negative
+- [ ] 2.9 Test backward compatibility — existing API consumers work without changes
 
 ## 3. Deployment
 
