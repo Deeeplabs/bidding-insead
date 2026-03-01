@@ -14,7 +14,7 @@ The frontend expects existing fields (capital_spent, capital_left, credits_earne
 - Ensure `capital_left` is never negative across ALL code paths (dashboard stats, student detail, student list, bidding round module)
 - Fix the hardcoded `left: 1` credits placeholder in `StudentCreditService`
 - Maintain backward compatibility with existing API response shape
-- Fix `credits_to_be_fulfilled` calculation in `StudentStatsService` to correctly use `max(0, credits_granted - credits_earned)`
+- Fix `credits_to_be_fulfilled` calculation in `StudentStatsService` to correctly output the target configured credits (`credits_granted`) per PM constraints, and ensure "Credit Earned" only counts finalized enrolled courses.
 
 **Non-Goals:**
 - No changes to frontend (bidding-web)
@@ -40,9 +40,9 @@ The frontend expects existing fields (capital_spent, capital_left, credits_earne
 **Rationale**: The `left` field in `StudentCredit` model should represent remaining credits available. The hardcoded `1` appears to be a placeholder from initial development.
 
 ### 4. Credits To Be Fulfilled — Proper Calculation
-**Decision**: Fix calculation in `StudentStatsService` to subtract `credits_earned` from `credits_granted` and use `max(0, ...)`.
+**Decision**: Fix calculation in `StudentStatsService` to use just `credits_granted` (no subtraction of `credits_earned`), and ensure `StudentCreditService` only counts finalized enrollments for `taken`.
 
-**Rationale**: The previous logic didn't properly compute the remaining credits to be fulfilled based on what was actually granted and earned.
+**Rationale**: PM defines "Credits to be fulfilled" as the minimum credits required configured for the bidding cycle (a target, not a remaining balance), and "Credit Earned" strictly as final enrollment credits.
 
 ### 5. PM Student List Match Strategy
 **Decision**: Refactor `StudentService::listStudents` mapping to use the dynamically computed `credits_to_be_fulfilled` (`Credits` column) and `capital->getLeft()` (`Capital Left` column). Further, inject `StudentCapitalService` into `StudentDataToDtoMapper` and migrate querying logic to handle these fields as computed data instead of pure SQL sorting over `sd.remainingCapital` and `sd.creditTaken`.
@@ -58,3 +58,10 @@ The frontend expects existing fields (capital_spent, capital_left, credits_earne
 **[Risk] Students with no bids** → **Mitigation**: Returns 0 for capital_left and credits_to_be_fulfilled when no campaigns found (existing behavior, unchanged).
 
 **[Trade-off] Credits `left` field semantics** → The `left` field on `StudentCredit` could mean either "credits remaining to take" or "credit slots remaining". We're implementing it as `max(0, totalCredits - creditsEarned)`, which means "credits remaining to take". This aligns with how `toBeFulfilled` already works.
+
+## Validation Scenario (ST 1 - Single Campaign)
+The design fulfills the ST 1 rules (1 campaign, 2 bidding rounds) demonstrated in the video:
+1. **Credit Earned**: Uses `getStudentTotalCreditsTaken($student)` which strictly queries final enrolled/selected courses across rounds.
+2. **Credits to be fulfilled**: Uses `$creditsGranted` derived statically from the PM configuration (`getMinCreditsToFulfill()`).
+3. **Capital Spent**: Uses `getStudentTotalSpentCapital($student)` dynamically aggregating spent points from multiple rounds.
+4. **Capital Left**: Handled at the model tier dynamically as `max(0, granted - spent)` from a single single-campaign accumulation.

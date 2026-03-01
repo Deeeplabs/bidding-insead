@@ -13,8 +13,8 @@ This causes confusion for PMs and students who see negative capital or incorrect
 - **Fix Capital Left Calculation**: Add `max(0, ...)` guard in `StudentCapitalService::getCapital()` so `capital_left` is never negative
 - **Fix Capital Left in Bidding Round View**: Add `max(0, ...)` guard in `CampaignToActiveBiddingRoundDtoMapper::buildBiddingRoundModuleData()` for the per-module capital_left calculation
 - **Fix Credits Left Placeholder**: Replace the hardcoded `left: 1` in `StudentCreditService::getCredits()` with a proper calculation
-- **Fix Credits To Be Fulfilled**: Update calculation in `StudentStatsService` to properly subtract credits_earned from credits granted and clamp to zero using `max(0, ...)`
-- **Match PM List With Dashboard**: Update `StudentListToDtoMapper`, `StudentToDtoMapper`, and `StudentDataToDtoMapper` to dynamically compute and map `credits_to_be_fulfilled` and `capital_left`, and refactor `StudentService::listStudents` to apply computed sorting and filtering for `capital_left` instead of stale DB values.
+- **Fix Credits To Be Fulfilled**: Update calculation in `StudentStatsService` to properly map `credits_to_be_fulfilled` directly to the campaign's target credits granted.
+- **Match PM List With Dashboard**: Update `StudentListToDtoMapper` and `StudentToDtoMapper` to dynamically compute and map `credits_to_be_fulfilled` to the target configured total, and compute `capital_left` dynamically over multiple sessions.
 
 The frontend (bidding-web) expects these existing fields:
 - capital_spent
@@ -38,8 +38,8 @@ Only backend calculation logic needs to be fixed - no DTO or frontend changes re
 - **StudentCapitalService.php** (line 44): Add `max(0, ...)` to `left` calculation in `getCapital()`
 - **StudentCreditService.php** (line 60): Replace hardcoded `left: 1` with proper calculation
 - **CampaignToActiveBiddingRoundDtoMapper.php** (line 402): Add `max(0, ...)` to `capital_left` in bidding round module
-- **StudentStatsService.php**: Fixed `credits_to_be_fulfilled` calculation to subtract `credits_earned` from credits granted, wrapped in `max(0, ...)`
-- **StudentListToDtoMapper.php** / **StudentToDtoMapper.php**: Replaced legacy `credits` logic with `credits_to_be_fulfilled` computation.
+- **StudentStatsService.php**: Fixed `credits_to_be_fulfilled` mapping to represent the static campaign target sum.
+- **StudentListToDtoMapper.php** / **StudentToDtoMapper.php**: Replaced legacy `credits` logic with target configuration sum `creditsGranted`.
 - **StudentDataToDtoMapper.php**: Injected `StudentCapitalService` to map dynamically computed `capital_left` into `remaining_capital` instead of using stale static DB values.
 - **StudentService.php**: Refactored `listStudents` pagination querying to dynamically sort and filter the `capital_left` rather than rely on the obsolete `COALESCE(sd.remainingCapital, 0)` SQL execution.
 - **BidRepository**: Used to find campaigns student has participated in (already in place)
@@ -53,3 +53,11 @@ Only backend calculation logic needs to be fixed - no DTO or frontend changes re
 ### Migration Risk
 - Low - only calculation logic changes, no schema changes
 - No breaking changes to API response shape (fields remain the same, values become non-negative)
+
+## Scenario Validation (ST 1)
+
+Based on the provided ST 1 video scenario (1 campaign, 2 bidding rounds), the applied changes accurately reflect:
+1. **Credit Earned**: Maps to `credits_earned` which sums the final enrollment course credits (`getStudentTotalCreditsTaken()`).
+2. **Credits to be fulfilled**: Maps to `credits_to_be_fulfilled` which reflects the PM-configured target for the entire bidding cycle across the rounds (`getTotalCreditGranted()`).
+3. **Capital Spent**: Maps to `capital_spent` tracking the sum of bid points spent across the rounds within the campaign.
+4. **Capital Left**: Maps to `capital_left` correctly evaluating to the total PM granted campaign capital minus the capital spent.
