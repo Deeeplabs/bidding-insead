@@ -1,67 +1,70 @@
 ## Context
 
-The student dashboard and bidding round views display capital and credits information. After the initial implementation of campaign-based accumulation logic, **three code paths still allow negative or incorrect values**:
+After the first round of fixes (negative values, hardcoded `left: 1`), three bug categories remain:
 
-1. `StudentCapitalService::getCapital()` — computes `capital - spent` without floor
-2. `CampaignToActiveBiddingRoundDtoMapper` — computes `capitalGranted - cumulativePoints` without floor
-3. `StudentCreditService::getCredits()` — returns hardcoded `left: 1` instead of actual calculation
+1. **Capital/credit source mismatch**: The single-student path (`getCapital()` / `getInitialCapital()`) accumulates capital from campaigns the student **has bids in**. The batch path (`getBatchCapital()`) uses **PromotionSetting initial capital** — a completely different data source. Neither path includes capital from campaigns the student is **eligible for but hasn't bid in yet**.
 
-The frontend expects existing fields (capital_spent, capital_left, credits_earned, credits_to_be_fulfilled) — only the backend calculation logic needs to be fixed.
+2. **PM Dashboard stats stale**: `PMDashboardStatsService::getBiddingStatus()` correctly counts active bidding phases but the "completed" count is 0 because no bids have been submitted. The "total" denominator should still update. `getCreditProgress()` shows 0/0 because it only counts `final_enrollment` phases (by design).
+
+3. **Student list count instability**: `StudentRepository::queryPaginated()` with `fetchJoinCollection: true` and a `leftJoin` on `studentData` can produce inconsistent counts due to Doctrine Paginator's count vs result query divergence.
 
 ## Goals / Non-Goals
 
 **Goals:**
-- Ensure `capital_left` is never negative across ALL code paths (dashboard stats, student detail, student list, bidding round module)
-- Fix the hardcoded `left: 1` credits placeholder in `StudentCreditService`
-- Maintain backward compatibility with existing API response shape
-- Fix `credits_to_be_fulfilled` calculation in `StudentStatsService` to correctly output the target configured credits (`credits_granted`) per PM constraints, and ensure "Credit Earned" only counts finalized enrolled courses.
+- Ensure capital calculations use **campaign-level capital grants** (`getMinCapitalGranted()`) consistently across all code paths
+- Include a student's **eligible campaigns** (not just bid-participated) when computing capital and credit totals
+- Fix `getBatchCapital()` to align with `getCapital()` logic (campaign-based instead of PromotionSetting-based)
+- Add missing `max(0, ...)` floor in `getBatchCapital()`
+- Fix or investigate the student list count inconsistency
+- Ensure PM Dashboard Bidding Status total reflects all eligible students from active bidding rounds
 
 **Non-Goals:**
 - No changes to frontend (bidding-web)
 - No changes to DTO field names or types
 - No new API endpoints
 - No database schema changes
+- Credit Progress showing 0/0 when no final_enrollment is active is by design — no fix needed
 
 ## Decisions
 
-### 1. Capital Floor Strategy — Apply at Model Level
-**Decision**: Add `max(0, ...)` guard in `StudentCapitalService::getCapital()` at the `StudentCapital` model creation point (line 44).
+### 1. Capital Source — Campaign-Level vs Promotion-Level
+**Decision**: Both `getInitialCapital()` and `getBatchCapital()` should compute initial capital by summing `campaign->getMinCapitalGranted()` from all campaigns the student is **eligible for** (not just ones they have bids in).
 
-**Rationale**: This is the single source of truth for capital calculations consumed by `StudentStatsService`, `StudentToDtoMapper`, and `StudentListToDtoMapper`. Fixing here prevents negative capital across all three consumers without modifying each individually.
+**Rationale**: 
+- The PM sets capital at the **campaign level** (`min_capital_granted` field on Campaign entity). This is the authoritative source.
+- Using `PromotionSetting::getInitialCapital()` is wrong — that's a legacy per-promotion value unrelated to campaign bidding capital.
+- Using bid participation is too restrictive — a student should see their capital allocation as soon as they're eligible for a campaign, not only after placing their first bid.
 
-### 2. Bidding Round Capital Floor — Apply at Mapper Level
-**Decision**: Add `max(0, ...)` guard in `CampaignToActiveBiddingRoundDtoMapper::buildBiddingRoundModuleData()` (line 402).
+**Implementation**: Create a new method `getStudentEligibleCampaigns(Student $student)` that finds campaigns where the student appears in the eligible student list (via `CampaignStudentEligibilityService` or campaign module config's `student_selection`). Use this in both `getInitialCapital()` and `getBatchCapital()`.
 
-**Rationale**: This is a separate code path that calculates per-module capital_left using campaign-level `min_capital_per_student` config, not the accumulated capital from `StudentCapitalService`. Must be fixed independently.
+**Trade-off**: This requires querying campaign eligibility which may be slower than the current bid-lookup approach. Mitigate with batch operations and caching.
 
-### 3. Credits Left — Proper Calculation
-**Decision**: Replace hardcoded `left: 1` in `StudentCreditService::getCredits()` (line 60) with a proper calculation based on `totalCredits - totalCreditsEarned`, clamped to `max(0, ...)`.
+### 2. Batch Capital — Rewrite to Match Single Path
+**Decision**: Rewrite `getBatchCapital()` to use campaign-level capital grants instead of `PromotionSetting`. Additionally, add the missing `max(0, ...)` floor.
 
-**Rationale**: The `left` field in `StudentCredit` model should represent remaining credits available. The hardcoded `1` appears to be a placeholder from initial development.
+**Rationale**: `getBatchCapital()` line 225 currently does `left: $capital - $spent` without the `max(0, ...)` guard that exists in `getCapital()` line 53. This inconsistency means the student list page can show negative capital while the student dashboard shows 0.
 
-### 4. Credits To Be Fulfilled — Proper Calculation
-**Decision**: Fix calculation in `StudentStatsService` to use just `credits_granted` (no subtraction of `credits_earned`), and ensure `StudentCreditService` only counts finalized enrollments for `taken`.
+### 3. Credit Source — Campaign Eligibility
+**Decision**: Update `getTotalCreditGranted()` to include campaigns the student is eligible for, not just those with existing bids.
 
-**Rationale**: PM defines "Credits to be fulfilled" as the minimum credits required configured for the bidding cycle (a target, not a remaining balance), and "Credit Earned" strictly as final enrollment credits.
+**Rationale**: Same reasoning as capital — the PM configures `min_credits_to_fulfill` at the campaign level. A student should see their credit target as soon as they're eligible.
 
-### 5. PM Student List Match Strategy
-**Decision**: Refactor `StudentService::listStudents` mapping to use the dynamically computed `credits_to_be_fulfilled` (`Credits` column) and `capital->getLeft()` (`Capital Left` column). Further, inject `StudentCapitalService` into `StudentDataToDtoMapper` and migrate querying logic to handle these fields as computed data instead of pure SQL sorting over `sd.remainingCapital` and `sd.creditTaken`.
+### 4. PM Dashboard Bidding Status
+**Decision**: The current `getBiddingStatus()` logic is mostly correct. The issue is that with a brand-new campaign, the "completed" count is 0 (correct — no one has bid) but the "total" should still reflect eligible students. Verify this path works correctly with the new campaign data.
 
-**Rationale**: The PM Dashboard student list UI was sourcing values from old DTO shapes mapping and the original, stale `StudentData` flat fields. By forcing PHP-level computation before filtering/sorting matching, we guarantee the PM list columns match the student's individual dashboard down to the decimal.
+**Rationale**: The screenshots show 0/15 which suggests the denominator IS being computed (15 is from other campaigns' existing data). The new campaign's 5 students are not being counted, likely because the phase config `isActive` flag may be false despite having valid dates.
+
+### 5. Student List Count — Doctrine Paginator
+**Decision**: Investigate and fix the `fetchJoinCollection` behavior. Consider adding `DISTINCT` to the query or switching the paginator configuration.
+
+**Rationale**: The `leftJoin('s.studentData', 'sd')` combined with `fetchJoinCollection: true` can cause the paginator's `COUNT` query to return different results than the actual data query when `studentData` has NULL or multiple rows.
 
 ## Risks / Trade-offs
 
-**[Risk] Edge case: Student overspending capital** → **Mitigation**: `max(0, ...)` ensures no negative display. The system already prevents overspending via bid validators (`BidPointValidator`), so this is a display-only safeguard.
+**[Risk] Performance of campaign eligibility lookup** → **Mitigation**: For `getBatchCapital()`, batch-query eligible campaigns rather than per-student lookups. Use campaign's `student_filter_ids` or similar pre-computed eligibility.
 
-**[Risk] Regression in other capital consumers** → **Mitigation**: The fix in `StudentCapitalService` is at the model layer, so all downstream consumers (stats, detail, list) automatically get the fix. No individual consumer changes needed.
+**[Risk] Capital semantics change** → **Mitigation**: This changes what "initial capital" means from "promotion-level grant" to "campaign-level grant sum". Verify that no other consumers rely on the PromotionSetting-based capital.
 
-**[Risk] Students with no bids** → **Mitigation**: Returns 0 for capital_left and credits_to_be_fulfilled when no campaigns found (existing behavior, unchanged).
+**[Risk] Backward compatibility** → **Mitigation**: API response shape unchanged. Only the computed values change to be correct.
 
-**[Trade-off] Credits `left` field semantics** → The `left` field on `StudentCredit` could mean either "credits remaining to take" or "credit slots remaining". We're implementing it as `max(0, totalCredits - creditsEarned)`, which means "credits remaining to take". This aligns with how `toBeFulfilled` already works.
-
-## Validation Scenario (ST 1 - Single Campaign)
-The design fulfills the ST 1 rules (1 campaign, 2 bidding rounds) demonstrated in the video:
-1. **Credit Earned**: Uses `getStudentTotalCreditsTaken($student)` which strictly queries final enrolled/selected courses across rounds.
-2. **Credits to be fulfilled**: Uses `$creditsGranted` derived statically from the PM configuration (`getMinCreditsToFulfill()`).
-3. **Capital Spent**: Uses `getStudentTotalSpentCapital($student)` dynamically aggregating spent points from multiple rounds.
-4. **Capital Left**: Handled at the model tier dynamically as `max(0, granted - spent)` from a single single-campaign accumulation.
+**[Trade-off] Eligibility-based vs bid-based capital** → After this change, a student will see their total capital increase as soon as they become eligible for a new campaign, before placing any bids. This is the correct UX since the student needs to know their capital budget to place bids.

@@ -1,22 +1,40 @@
-# Implementation Tasks — Fix Student Credits & Capital (Non-Negative Values)
+# Implementation Tasks — Fix Student Credits & Capital (Phase 2)
 
-## 1. Backend — Fix Capital and Credits Calculations
+## 1. Backend — Fix Capital Source Consistency
 
-- [x] 1.1 Fix `StudentCapitalService::getCapital()` — add `max(0, $capital - $spent)` guard at line 44 in `bidding-api/src/Domain/Student/StudentCapitalService.php`
-- [x] 1.2 Fix `CampaignToActiveBiddingRoundDtoMapper::buildBiddingRoundModuleData()` — add `max(0, $capitalGranted - $cumulativePoints)` guard at line 402 in `bidding-api/src/Domain/Campaign/ActiveCampaign/Mapper/CampaignToActiveBiddingRoundDtoMapper.php`
-- [x] 1.3 Fix `StudentCreditService::getCredits()` — replace hardcoded `left: 1` with proper calculation and ensure that only finalized enrollment courses are counted for earned credits by using `getStudentTotalCreditsTaken($student)`.
-- [x] 1.4 Fix `StudentStatsService` — update `credits_to_be_fulfilled` calculation to use the target total `$creditsGranted` for the campaign cycle.
-- [x] 1.5 Fix PM Student List Match — Refactor `StudentListToDtoMapper`, `StudentToDtoMapper` mapping to use the target `$creditsGranted` (`Credits` column) and `capital->getLeft()` (`Capital Left` column) based on dynamic accumulation.
+- [x] 1.1 **Create `getStudentEligibleCampaigns(Student $student)` method** in `StudentCapitalService` — Find all active (open, not expired) campaigns where the student appears in the eligible student list. Use campaign's student selection config or query `CampaignStudentFilter` table. Returns `Campaign[]`.
 
-## 2. Manual Verification
+- [x] 1.2 **Rewrite `getInitialCapital(Student $student)`** in `StudentCapitalService` — Change from bid-based campaign lookup (`getStudentParticipatedCampaigns`) to eligibility-based lookup (`getStudentEligibleCampaigns`). Sum `campaign->getMinCapitalGranted()` from eligible campaigns.
 
-- [x] 2.1 Test dashboard stats endpoint (`GET /student/dashboard/stats`) — verify capital_left is >= 0
-- [x] 2.2 Test student capital endpoint (`GET /student/capital`) — verify capital left is >= 0
-- [x] 2.3 Test active bidding round endpoint — verify module capital_left is >= 0
-- [x] 2.4 Test with student having single campaign — verify capital_left and credits calculations
-- [x] 2.5 Test with student having multiple campaigns — verify accumulation works correctly
-- [x] 2.6 Test with manual capital adjustment — verify adjustment is included in capital_left
-- [x] 2.7 Test with student who has overspent capital — verify capital_left shows 0, not negative
-- [x] 2.8 Test with student who has over-fulfilled credits — verify credits_to_be_fulfilled shows 0, not negative
-- [x] 2.9 Test backward compatibility — existing API consumers work without changes
-- [x] 2.10 Test ST 1 Video Scenario (1 Campaign, 2 Rounds) — Verify all values (Credit Earned, Credits to be fulfilled, Capital Spent, Capital Left) strictly follow video definitions.
+- [x] 1.3 **Rewrite `getBatchCapital(array $students)`** in `StudentCapitalService` — Replace PromotionSetting-based initial capital with campaign-level capital. For each student, compute initial capital as sum of `getMinCapitalGranted()` from their eligible campaigns. Add `max(0, ...)` floor to `left` calculation at line 225.
+
+- [x] 1.4 **Fix `getBatchCapital` missing `max(0, ...)` floor** — Line 225 currently does `left: $capital - $spent`. Change to `left: max(0, $capital - $spent)` to match `getCapital()` line 53.
+
+## 2. Backend — Fix Credits Source for New Campaigns
+
+- [x] 2.1 **Rewrite `getTotalCreditGranted(Student $student)`** in `StudentCreditService` — Change from bid-based campaign lookup to eligibility-based lookup (matching the capital approach). Sum `campaign->getMinCreditsToFulfill()` from eligible campaigns.
+
+- [x] 2.2 **Align `getBatchTotalCredits(array $studentIds)`** in `StudentCreditService` — Currently uses `findTotalBiddingCreditsByStudents` (bid-based). Align with the eligibility-based approach for consistency.
+
+## 3. Backend — Fix PM Dashboard Stats
+
+- [x] 3.1 **Debug `getBiddingStatus()` denominator** in `PMDashboardStatsService` — Verify that the newly created campaign's eligible students are being counted in `totalEligible`. Check: (a) campaign appears in `findOpenCampaigns`, (b) phase config is found via date check, (c) `getEligibleStudents()` returns correct students.
+
+- [x] 3.2 **Check phase config `isActive` flag** — Duplicated campaigns may have `isActive = false` on their phase configs. The `getBiddingStatus()` at line 113 skips `!$pc->isActive()`. Verify the new campaign's phase configs have `isActive = true`.
+
+## 4. Backend — Fix Student List Inconsistent Count
+
+- [x] 4.1 **Investigate Doctrine Paginator inconsistency** — The `StudentRepository::queryPaginated()` uses `fetchJoinCollection: true` with a `leftJoin('s.studentData', 'sd')`. Test whether this causes count divergence. Consider: (a) adding `DISTINCT` on `s.id`, (b) removing unused `sd` join, or (c) setting `fetchJoinCollection: false` if no collection joins exist.
+
+- [x] 4.2 **Add `DISTINCT` to student query** — If `leftJoin` causes duplicates, add `->select('DISTINCT s')` or `->distinct(true)` to the query builder.
+
+## 5. Manual Verification
+
+- [ ] 5.1 Test student dashboard after new campaign creation — Verify capital_left includes new campaign's 900 grant
+- [ ] 5.2 Test student list Credits column — Verify it matches dashboard credits_to_be_fulfilled
+- [ ] 5.3 Test student list Capital column — Verify it matches dashboard capital_left
+- [ ] 5.4 Test PM Dashboard Bidding Status — Verify total includes new campaign's eligible students
+- [ ] 5.5 Test PM Dashboard after bidding round activation — Verify bidding status count updates
+- [ ] 5.6 Test student list consistency — Refresh 10 times, verify same result count every time
+- [ ] 5.7 Test bidding round vs dashboard capital — Verify bidding round shows per-campaign (900), dashboard shows accumulated total minus spent
+- [ ] 5.8 Test backward compatibility — Existing students with old campaigns still show correct values
