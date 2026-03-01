@@ -6,18 +6,23 @@ The system SHALL display the accurate total number of students who participated 
 #### Scenario: View simulation statistics after campaign creation
 - **GIVEN** a campaign has been created with students who submitted bids
 - **WHEN** the Programme Manager navigates to the Simulation phase detail view
-- **THEN** the displayed student count SHALL match the actual number of students who submitted bids in the associated bidding round
+- **THEN** the displayed student count SHALL match the actual number of students who submitted bids in the associated bidding round (submissionStatus = 'final')
 
-#### Scenario: View simulation statistics after campaign editing
-- **GIVEN** a campaign exists with simulation statistics displayed
-- **WHEN** the Programme Manager edits the campaign (e.g., adds/removes modules, adjusts timing)
-- **AND** returns to the Simulation phase detail view
-- **THEN** the displayed student count SHALL reflect the current state accurately
+#### Scenario: View simulation statistics after simulation run
+- **GIVEN** a simulation has been run for a campaign
+- **WHEN** the Programme Manager views the Simulation phase statistics
+- **THEN** the displayed student count SHALL match the number of unique students in the simulation table for that run
 
 #### Scenario: Student count excludes invalid bids
 - **GIVEN** students have submitted bids in the bidding round
 - **WHEN** calculating the simulation student count
 - **THEN** the count SHALL only include bids with valid status (e.g., not cancelled, not expired)
+
+#### Scenario: Student count matches Bidding Round when no simulation run exists
+- **GIVEN** a campaign is in Simulation phase but no simulation run has been executed yet
+- **WHEN** the Programme Manager views the Simulation phase statistics
+- **THEN** the displayed student count SHALL match the number of students with final bids (submissionStatus = 'final')
+- **NOTE**: This may differ from Bidding Round's "eligible students" count - this is expected behavior
 
 ### Requirement: Simulation phase displays accurate course count
 The system SHALL display the accurate total number of courses/classes available in the simulation phase for a specific campaign and module.
@@ -31,6 +36,11 @@ The system SHALL display the accurate total number of courses/classes available 
 - **GIVEN** a campaign has been configured with specific courses for the bidding round
 - **WHEN** viewing simulation statistics
 - **THEN** the course count SHALL reflect the courses defined in the CampaignModule configuration
+
+#### Scenario: Course count shows available courses even with no bids
+- **GIVEN** a campaign has courses configured but no students have submitted bids yet
+- **WHEN** viewing simulation statistics
+- **THEN** the course count SHALL show all available courses, not zero
 
 ### Requirement: Statistics update correctly after campaign operations
 The system SHALL ensure simulation statistics are consistent after campaign creation and modification operations.

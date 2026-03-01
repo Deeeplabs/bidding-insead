@@ -1,11 +1,12 @@
 ## Why
 
-The "Simulation" and "Final Enrollment" phases in the campaign detail bidding view are displaying inaccurate counts for the number of students and courses. This data inconsistency occurs after creating or editing a campaign and directly impacts Programme Managers' ability to make informed decisions during the bidding lifecycle. Accurate statistics are critical for proper resource allocation and enrollment management.
+The "Simulation" and "Final Enrollment" phases in the campaign detail bidding view are displaying inaccurate counts for the number of students and courses. This data inconsistency occurs after creating or editing a campaign and directly impacts Programme Managers' ability to make informed decisions during the bidding lifecycle. **After initial fixes were applied, testing revealed that Simulation and Final Enrollment stats still do not match Bidding Round phase stats.**
 
 ## What Changes
 
 - **Investigate and fix** the incorrect student and course count calculations in the Simulation phase detail view
 - **Investigate and fix** the incorrect student and course count calculations in the Final Enrollment phase detail view
+- Ensure all phase statistics use consistent counting logic that matches the Bidding Round baseline
 - Verify that statistics update correctly after campaign creation and editing operations
 
 ## Capabilities
@@ -31,10 +32,18 @@ None - this is a bug fix to existing functionality.
 - API endpoints that provide statistics data to the frontend
 
 ### Root Cause Investigation Required
-1. Check the API response data for Simulation and Final Enrollment statistics
-2. Verify the query logic in `useSimulationPhase` and `useFinalEnrollmentPhase` hooks
-3. Examine the backend domain services that calculate these statistics
-4. Identify whether the issue is in data aggregation, filtering, or display logic
+
+**REVISED AFTER TESTING - Initial fixes were insufficient:**
+
+1. **Final Enrollment Stats Issue**: The `countEnrolledStudentsByCampaign()` method in `BidRepository` does NOT filter by `campaignModule`. This causes it to count ALL enrolled students across ALL modules in the campaign, not just those from the Final Enrollment phase.
+   - **Location**: `bidding-api/src/Repository/BidRepository.php::countEnrolledStudentsByCampaign()`
+   - **Fix needed**: Add `campaignModule` filter to count only students enrolled in the specific Final Enrollment phase
+
+2. **Simulation Stats Issue**: When no simulation run exists, `getBiddingStudentsCount()` falls back to counting students with `submissionStatus = 'final'` which may not match the eligible students count from Bidding Round.
+   - **Location**: `bidding-api/src/Domain/Simulation/Service/SimulationDashboardService.php::getBiddingStudentsCount()`
+   - **Fix needed**: Ensure fallback uses same eligible student counting logic as Bidding Round
+
+3. **Course Count Consistency**: Ensure all phases use the same course filtering logic from `campaignCourseService::getFilteredCourseData()` to get consistent course counts.
 
 ### Testing Considerations
 - Verify statistics display correctly after creating a new campaign

@@ -1,17 +1,19 @@
 ## Context
 
-The INSEAD Bidding System's campaign detail view displays statistics for the "Simulation" and "Final Enrollment" phases. Programme Managers rely on these statistics (student count, course count) to monitor enrollment and make decisions. Currently, these counts are inaccurate after creating or editing a campaign.
+The INSEAD Bidding System's campaign detail view displays statistics for the "Simulation" and "Final Enrollment" phases. Programme Managers rely on these statistics (student count, course count) to monitor enrollment and make decisions. 
+
+**REVISED AFTER TESTING:** After initial fixes were applied, testing revealed that Simulation and Final Enrollment stats still do not match Bidding Round phase stats. This requires a deeper analysis and revised approach.
 
 The issue manifests in:
-- **bidding-admin**: `src/components/dashboard/process/simulation/simulation-process.tsx` - displays Simulation statistics via `useSimulationPhase` hook
-- **bidding-admin**: `src/components/dashboard/process/final-enrollment/final-enrollment.tsx` - displays Final Enrollment statistics via `useFinalEnrollmentPhase` hook
+- **bidding-api**: `AdminCampaignDetailService::buildSimulationDetail()` - delegates to `SimulationDashboardService` for simulation statistics
+- **bidding-api**: `AdminCampaignDetailService::buildFinalEnrollmentDetail()` - uses `BidRepository::countEnrolledStudentsByCampaign()` for final enrollment statistics
 
 ## Goals / Non-Goals
 
 **Goals:**
-- Identify the root cause of inaccurate student and course counts in Simulation and Final Enrollment statistics
-- Fix the calculation logic to display accurate counts
-- Ensure statistics are correctly updated after campaign creation and editing
+- Fix Final Enrollment student count to filter by specific `campaignModule` (not all modules in campaign)
+- Fix Simulation student count to use consistent eligible student counting logic as Bidding Round
+- Ensure course counts are consistent across all phases using the same filtering logic
 
 **Non-Goals:**
 - No changes to the bidding workflow or simulation algorithm
@@ -20,29 +22,38 @@ The issue manifests in:
 
 ## Decisions
 
-### Investigation Approach
-1. **Frontend Data Flow Analysis**: Trace the data flow from API response to UI display in both `useSimulationPhase` and `useFinalEnrollmentPhase` hooks
-2. **Backend API Investigation**: Examine the API endpoints that provide statistics data to identify where the calculation goes wrong
-3. **Query Logic Review**: Check if filtering criteria are correct (e.g., correct campaign, session, module references)
+### Root Cause Analysis (Post-Testing)
+
+1. **Final Enrollment Stats Root Cause**:
+   - `BidRepository::countEnrolledStudentsByCampaign($campaignId)` only filters by `campaign_id`
+   - It does NOT filter by `campaignModule`, so it counts ALL students with SELECTED/ENROLLED status across ALL modules in the campaign
+   - **Fix**: Add `campaignModule` parameter to filter only students enrolled in the specific Final Enrollment phase
+
+2. **Simulation Stats Root Cause**:
+   - `SimulationDashboardService::getBiddingStudentsCount()` counts from simulation table when run exists
+   - When no run exists, it falls back to `BidRepository::countDistinctStudentsByCampaign()` which counts students with `submissionStatus = 'final'`
+   - This may not match the eligible students count from Bidding Round
+   - **Fix**: Ensure fallback uses same eligible student counting logic (or accept that it shows different numbers before simulation runs)
 
 ### Technical Approach
-- **If root cause is in frontend**: Fix the React Query hooks or component logic in `bidding-admin`
-- **If root cause is in backend**: Fix the domain service query logic in `bidding-api`
-- **No API contract changes**: Only fix data accuracy, preserve existing response shapes
+
+- **Final Enrollment Fix**: Modify `countEnrolledStudentsByCampaign()` to accept optional `$campaignModuleId` parameter
+- **Simulation Fix**: Review fallback logic in `getBiddingStudentsCount()` for consistency
+- **Course Count**: Ensure all phases use `campaignCourseService::getFilteredCourseData()` consistently
 
 ## Risks / Trade-offs
 
-- **Risk**: Statistics may be cached in React Query, causing stale data
-  - **Mitigation**: Ensure proper cache invalidation after campaign updates
-
-- **Risk**: Fixing the count may reveal legitimate edge cases (e.g., waitlisted students)
+- **Risk**: Adding campaignModule filter may reveal edge cases where students have multiple enrollments
   - **Mitigation**: Document what counts should include (enrolled only vs. all bidders)
 
-- **Risk**: Concurrent campaign operations may affect statistics
-  - **Mitigation**: Use database transactions for consistent reads
+- **Risk**: Course filtering logic may differ slightly between phases
+  - **Mitigation**: Ensure all phases use the same `getFilteredCourseData()` method
+
+- **Risk**: Statistics may appear different before simulation runs
+  - **Mitigation**: Document that Simulation shows "eligible students with bids" while Bidding Round shows "all eligible students"
 
 ## Open Questions
 
-1. Should "student count" include waitlisted students or only successfully enrolled students?
-2. Should "course count" include all classes or only classes with at least one enrolled student?
-3. After editing a campaign, do statistics need to be manually refreshed or should they update automatically?
+1. Should Final Enrollment student count include waitlisted students or only successfully enrolled students?
+2. Should course count include all classes or only classes with at least one enrolled student?
+3. For Simulation phase before a run is executed, what should the student count show? (eligible students vs. students with bids)

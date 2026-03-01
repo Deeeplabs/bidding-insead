@@ -6,18 +6,18 @@ The system SHALL display the accurate total number of students enrolled in the F
 #### Scenario: View final enrollment statistics after campaign creation
 - **GIVEN** a campaign has been created and has progressed through bidding and simulation
 - **WHEN** the Programme Manager navigates to the Final Enrollment phase detail view
-- **THEN** the displayed student count SHALL match the actual number of students who completed enrollment
+- **THEN** the displayed student count SHALL match the actual number of students who completed enrollment (status SELECTED or ENROLLED) in this specific Final Enrollment phase
 
-#### Scenario: View final enrollment statistics after campaign editing
-- **GIVEN** a campaign exists with final enrollment statistics displayed
-- **WHEN** the Programme Manager edits the campaign configuration
-- **AND** returns to the Final Enrollment phase detail view
-- **THEN** the displayed student count SHALL reflect the current state accurately
+#### Scenario: Student count filters by campaign module
+- **GIVEN** a campaign has multiple bidding rounds with different modules
+- **WHEN** viewing Final Enrollment statistics for a specific module
+- **THEN** the student count SHALL only include students enrolled in THAT specific Final Enrollment module
+- **NOTE**: This is critical - counting all enrolled students across all modules would be incorrect
 
 #### Scenario: Student count reflects final enrollment status
 - **GIVEN** students have completed the enrollment process
 - **WHEN** calculating the final enrollment student count
-- **THEN** the count SHALL include all students who have successfully enrolled in courses
+- **THEN** the count SHALL include all students who have successfully enrolled in courses (status SELECTED or ENROLLED)
 
 ### Requirement: Final Enrollment phase displays accurate course count
 The system SHALL display the accurate total number of courses/classes available in the Final Enrollment phase for a specific campaign and module.
@@ -25,7 +25,7 @@ The system SHALL display the accurate total number of courses/classes available 
 #### Scenario: View course count in final enrollment
 - **GIVEN** a campaign has reached the Final Enrollment phase
 - **WHEN** the Programme Manager views the Final Enrollment statistics
-- **THEN** the displayed course count SHALL match the number of classes in the campaign configuration
+- **THEN** the displayed course count SHALL match the number of classes in the campaign configuration for this module
 
 #### Scenario: Course count reflects final enrollment configuration
 - **GIVEN** a campaign has been configured with courses for the Final Enrollment phase
