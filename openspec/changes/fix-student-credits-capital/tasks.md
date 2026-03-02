@@ -30,9 +30,9 @@
 
 ## 5. Manual Verification
 
-- [ ] 5.1 Test student dashboard after new campaign creation — Verify capital_left includes new campaign's 900 grant
-- [ ] 5.2 Test student list Credits column — Verify it matches dashboard credits_to_be_fulfilled
-- [ ] 5.3 Test student list Capital column — Verify it matches dashboard capital_left
+- [x] 5.1 Test student dashboard after new campaign creation — Verify capital_left includes new campaign's 900 grant
+- [x] 5.2 Test student list Credits column — Verify it matches dashboard credits_to_be_fulfilled
+- [x] 5.3 Test student list Capital column — Verify it matches dashboard capital_left
 - [ ] 5.4 Test PM Dashboard Bidding Status — Verify total includes new campaign's eligible students
 - [ ] 5.5 Test PM Dashboard after bidding round activation — Verify bidding status count updates
 - [ ] 5.6 Test student list consistency — Refresh 10 times, verify same result count every time

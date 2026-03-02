@@ -8,7 +8,7 @@ After initial fixes for negative values, profound architectural bugs remained in
    - The Student Dashboard computed capital by summing grants from campaigns the student **had bids in**, ignoring newly eligible campaigns where the student hadn't bid yet.
    - The Student List page mapped initial capital straight from `PromotionSetting`, an unrelated legacy table giving inconsistent and wrong values.
    - The Bidding Module View correctly used the campaign-level grant.
-2. **Credits Source Inconsistency**: Similar to capital, the Student Dashboard sourced credit targets (`min_credits_to_fulfill`) only from bid-participated campaigns rather than eligible campaigns.
+2. **Credits Source Inconsistency**: Similar to capital, the Student Dashboard sourced credit targets (`min_credits_to_fulfill`) only from bid-participated campaigns rather than eligible campaigns. Additionally, the PM Student List was displaying "Credits Taken" while the Student Dashboard displayed "Credits to be Fulfilled", creating a discrepancy.
 3. **PM Dashboard Bidding Status Divergence**: The "Bidding Status Overview" widget showed `0 / n` (e.g., `0 / 15` instead of `0 / 20`) for newly created campaigns because duplicating a campaign often sets the underlying `phase-config` `isActive` constraint to false despite valid date ranges. It artificially restricted eligible denominator counts.
 4. **Student List Total Count Oscillation**: Running refresh on the student list could randomly return 5 vs 9 results. Paginator logic applied `fetchJoinCollection: true` on queries with a `LEFT JOIN` to `studentData`.
 
@@ -27,7 +27,7 @@ Reworked core logic across capital and credit services to ensure that definition
 
 2. **`src/Domain/Student/StudentCreditService.php`**
    - Transferred source query context for `getTotalCreditGranted()` to ingest results via the newly implemented `getStudentEligibleCampaigns()` model, surfacing the credit targets the moment a student is considered eligible rather than conditionally post-bidding.
-   - Rewrote `getBatchTotalCredits()` batch mapping to directly lean on unified query logic for safety.
+   - Rewrote `getBatchTotalCredits()` batch mapping to directly lean on unified query logic for safety, iterating over `getTotalCreditGranted()` to sync the definition of "credits" with the student dashboard's target expectation.
 
 3. **`src/Domain/Dashboard/PMDashboardStatsService.php`**
    - Removed strict `isActive` boolean gating inside `getBiddingStatus()` and `getCreditProgress()`. Relies natively on the valid start/end scheduling boundary (`$now >= $startDate && $now <= $endDate`). Forces active phases inside duplicated campaigns to naturally count all eligible students in the aggregate denominator.
@@ -36,10 +36,13 @@ Reworked core logic across capital and credit services to ensure that definition
    - Forced `queryPaginated()` Doctrine Paginator setup into `fetchJoinCollection: false` resolving the random counting offset when evaluating arrays with `LEFT JOIN studentData`.
    - Injected `->select('DISTINCT s')` directly into the ORM QueryBuilder.
 
+5. **`src/Domain/Student/Mapper/StudentListToDtoMapper.php`**
+   - Aligned the fallback calculation for credits to use `getTotalCreditGranted()` instead of total taken credits, guaranteeing the PM Student List consistently displays "Credits to be fulfilled" under the `CREDITS` column, matching user expectations.
+
 ## Impact
 
 - **Data Accuracy:** `Capital Left` natively syncs between the Student Dashboard and Student Lists immediately for eligible participants on brand new campaigns.
-- **Data Accuracy:** `Credits to be fulfilled` target correctly incorporates requirements the moment student matching is performed on campaign publishing.
+- **Data Accuracy:** `Credits to be fulfilled` target correctly incorporates requirements the moment student matching is performed on campaign publishing, and is properly synchronized between the PM Student List and the Student Dashboard.
 - **Data Consistency:** Eliminates the student list total result fluctuation glitch.
 - **Data Accuracy:** `Bidding Status Overview` PM widget actively represents true student-reach totals regardless of duplicated active flags.
 - **Compatibility:** Fully backwards consistent. No DTO definition/type transformations.
