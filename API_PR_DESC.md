@@ -26,23 +26,26 @@ Reworked core logic across capital and credit services to ensure that definition
    - Applied the missing `max(0, $capital - $spent)` clamp natively into `getBatchCapital()`.
 
 2. **`src/Domain/Student/StudentCreditService.php`**
-   - Transferred source query context for `getTotalCreditGranted()` to ingest results via the newly implemented `getStudentEligibleCampaigns()` model, surfacing the credit targets the moment a student is considered eligible rather than conditionally post-bidding.
-   - Rewrote `getBatchTotalCredits()` batch mapping to directly lean on unified query logic for safety, iterating over `getTotalCreditGranted()` to sync the definition of "credits" with the student dashboard's target expectation.
+   - Transferred source query context for `getTotalCreditGranted()` to ingest results via the newly implemented `getStudentEligibleCampaigns()` model.
+   - Modified `getBatchTotalCredits()` to calculate and return "Credits Earned" (credits taken + adjustments) instead of the total static target credits, matching the explicit requirement for the PM student list.
 
-3. **`src/Domain/Dashboard/PMDashboardStatsService.php`**
-   - Removed strict `isActive` boolean gating inside `getBiddingStatus()` and `getCreditProgress()`. Relies natively on the valid start/end scheduling boundary (`$now >= $startDate && $now <= $endDate`). Forces active phases inside duplicated campaigns to naturally count all eligible students in the aggregate denominator.
+3. **`src/Domain/Student/StudentService.php`**
+   - Aligned `listStudents()` parameters to supply the pre-hydrated Doctrine `$allStudents` collection straight into `getBatchTotalCredits()` downstream.
 
-4. **`src/Repository/StudentRepository.php`**
-   - Forced `queryPaginated()` Doctrine Paginator setup into `fetchJoinCollection: false` resolving the random counting offset when evaluating arrays with `LEFT JOIN studentData`.
+4. **`src/Domain/Dashboard/PMDashboardStatsService.php`**
+   - Removed strict `isActive` boolean gating inside `getBiddingStatus()` and `getCreditProgress()`. Relies natively on the valid start/end scheduling boundary (`$now >= $startDate && $now <= $endDate`).
+
+5. **`src/Repository/StudentRepository.php`**
+   - Forced `queryPaginated()` Doctrine Paginator setup into `fetchJoinCollection: false` resolving the random counting offset.
    - Injected `->select('DISTINCT s')` directly into the ORM QueryBuilder.
 
-5. **`src/Domain/Student/Mapper/StudentListToDtoMapper.php`**
-   - Aligned the fallback calculation for credits to use `getTotalCreditGranted()` instead of total taken credits, guaranteeing the PM Student List consistently displays "Credits to be fulfilled" under the `CREDITS` column, matching user expectations.
+6. **`src/Domain/Student/Mapper/StudentListToDtoMapper.php` & `StudentToDtoMapper.php`**
+   - Aligned the calculations and fallbacks for credits to map `$creditsTaken` rather than the `creditsGranted` minimum threshold, guaranteeing the PM Student List consistently displays "Credits Earned" under the `CREDITS` column, exactly matching the student dashboard.
 
 ## Impact
 
 - **Data Accuracy:** `Capital Left` natively syncs between the Student Dashboard and Student Lists immediately for eligible participants on brand new campaigns.
-- **Data Accuracy:** `Credits to be fulfilled` target correctly incorporates requirements the moment student matching is performed on campaign publishing, and is properly synchronized between the PM Student List and the Student Dashboard.
+- **Data Accuracy:** `Credits` column correctly displays the `Credits Earned` real-time value and is rigorously synchronized between the PM Student List and the Student Dashboard.
 - **Data Consistency:** Eliminates the student list total result fluctuation glitch.
 - **Data Accuracy:** `Bidding Status Overview` PM widget actively represents true student-reach totals regardless of duplicated active flags.
 - **Compatibility:** Fully backwards consistent. No DTO definition/type transformations.
