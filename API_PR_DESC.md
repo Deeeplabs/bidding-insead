@@ -10,10 +10,11 @@ The Flex Switch feature had several gaps across filtering, validation, rule enfo
 4. **No Schedule Conflict Detection**: There was no check against the student's active enrolled classes for scheduling conflicts before allowing a switch.
 5. **Unenforced Rule Configuration**: Bid points rules (`deduct_points`, `minimum_points`) and `max_submissions_allowed_per_student` from `FlexSwitchConfiguration` were not evaluated during flex switch submissions.
 6. **No Notifications**: Students received no notification when submitting a flex switch request or when a Programme Manager approved/rejected their request. Notification template variables `{{announcement_title}}` and `{{announcement_body}}` were passed as raw placeholders instead of resolved content.
+7. **Limited Search Functionality**: The `/student/flex-switch/switch-to-courses` endpoint only supported searching by course name, course ID, and section — lacking the ability to search by module or home campus.
 
 ## Solution
 
-Centralized all flex switch validations into the domain service layer, enriched the API response with promotion period metadata, enforced PM-configured rules, and integrated notification triggers with properly resolved content.
+Centralized all flex switch validations into the domain service layer, enriched the API response with promotion period metadata, enforced PM-configured rules, integrated notification triggers with properly resolved content, and enhanced search capabilities.
 
 ### Changes Made
 
@@ -39,10 +40,18 @@ Centralized all flex switch validations into the domain service layer, enriched 
      - **Max Submissions check**: Counts existing flex switch submissions for the student and rejects if `max_submissions_allowed_per_student` limit is reached.
    - Injected `NotificationService` and `UserRepository` via constructor.
    - After successful request creation, triggers a `CUSTOM_ANNOUNCEMENT` notification to the student with resolved `announcement_title` ("Flex Switch Request Submitted") and `announcement_body` (includes actual from/to course names).
+   - Enhanced `getSwitchToCourses()` with expanded search functionality supporting:
+     - Course name (existing)
+     - Course ID (existing)
+     - Section (existing)
+     - Module name (NEW - e.g., "Module 1", "Module 2")
+     - Campus name (NEW - e.g., "Singapore", "France")
+     - Campus code (NEW - e.g., "SGP", "FRA")
 
 5. **`src/Controller/Api/Student/FlexSwitch/FlexSwitchController.php`**
    - Delegates all validation to `flexSwitchService->submitRequest()`.
    - Maps `\DomainException` to HTTP 400 JSON responses.
+   - Updated OpenAPI documentation for `/student/flex-switch/switch-to-courses` to reflect enhanced search parameter description.
 
 6. **`src/Service/FlexSwitchApprovalService.php`**
    - Injected `NotificationService` via constructor.
@@ -54,3 +63,4 @@ Centralized all flex switch validations into the domain service layer, enriched 
 - **Stricter Filtering**: Only Core courses matching the student's Programme and Promotion are returned, preventing invalid switch targets.
 - **Domain Validation**: Enrollment duplicates, schedule conflicts, bid point thresholds, and submission limits are all enforced at the service layer before request creation.
 - **Notification Coverage**: Students receive immediate notifications on flex switch request submission and on approval/rejection processing, with fully resolved content (no raw template placeholders).
+- **Enhanced Search**: The `search` query parameter on `/student/flex-switch/switch-to-courses` now supports searching by module name and campus (name or code), in addition to existing course name, course ID, and section searches. Example: `?from_class_id=19142&search=module`

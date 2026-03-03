@@ -1,6 +1,6 @@
 ## Context
 
-The Flex Switch feature allows students to switch their enrolled courses. Currently, the `/v2/api/flex-switch-class-configuration` endpoint does not enforce strict filtering by Programme and Promotion to limit courses only to "Core" types. Additionally, the response lacks `module` and `term` details which are necessary for the frontend. The current system also lacks robust validation to prevent a student from switching into a course they are already enrolled in, or one that has schedule conflicts. Bid point rules configuration must also be verified to ensure proper deduction or validation during the switch. 
+The Flex Switch feature allows students to switch their enrolled courses. Currently, the `/v2/api/flex-switch-class-configuration` endpoint does not enforce strict filtering by Programme and Promotion to limit courses only to "Core" types. Additionally, the response lacks `module` and `term` details which are necessary for the frontend. The current system also lacks robust validation to prevent a student from switching into a course they are already enrolled in, or one that has schedule conflicts. Bid point rules configuration must also be verified to ensure proper deduction or validation during the switch. The search functionality on the switch-to-courses endpoint also needs enhancement to support searching by module name and campus.
 
 ## Goals / Non-Goals
 
@@ -10,6 +10,7 @@ The Flex Switch feature allows students to switch their enrolled courses. Curren
 - Implement validation checks against existing student enrollments and schedule conflicts during a flex switch request.
 - Ensure bid points and max submission rule configurations are correctly checked and applied.
 - Trigger notifications upon submission of a request (`POST student/flex-switch/request`) and processing of an approval request (`POST dashboard/flex-switch/approval-requests/{id}/process`). Ensure notification payloads correctly resolve `title` and `body` variables.
+- Enhance the `/student/flex-switch/switch-to-courses` endpoint to support searching by module name and campus (home campus) in addition to course name, course ID, and section.
 
 **Non-Goals:**
 - Completely overhauling the simulation or allocation engine.
@@ -25,9 +26,15 @@ The Flex Switch feature allows students to switch their enrolled courses. Curren
     - Check class scheduling to reject conflicting class times.
 4. **Rules Verification**: We will inject the existing Rules checker into the Flex Switch workflow to validate that rules configuration is honored during a flex switch. Specifically verifying bid points and the `max_submissions_allowed_per_student`.
 5. **Notification Triggers**: We will add hooks or listeners to dispatch notifications when a student submits a flex switch request, and when a dashboard PM/admin processes an approval request. We will also pass the correct data to map `{{announcement_title}}` and `{{announcement_body}}` placeholders in the notification template to fix empty content bugs.
+6. **Enhanced Search**: We will extend the search query in `getSwitchToCourses()` to include:
+    - Module name matching (e.g., "Module 1", "Module 2")
+    - Campus name matching (e.g., "Singapore", "France")
+    - Campus code matching (e.g., "SGP", "FRA")
+    This will use CONCAT expressions to match the module format stored in the database and LIKE queries for campus fields.
 
 ## Risks / Trade-offs
 
 - **Risk: Breaking Frontend Clients** → Mitigation: All fields added to the DTOs are strictly additive. No existing fields will be removed.
 - **Risk: Increased Query Complexity** → Mitigation: Use optimal DQL to fetch Programme and Promotion relationships without causing N+1 issues.
 - **Risk: Blocking Legitimate Switches** → Mitigation: Ensure conflict checks do not incorrectly flag past (archived) enrollments; only check active sessions or campaigns.
+- **Risk: Search Performance** → Mitigation: Add appropriate database indexes on campus and promotion period fields if not already present.

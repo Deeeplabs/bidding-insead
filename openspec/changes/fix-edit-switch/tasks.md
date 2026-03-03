@@ -30,3 +30,11 @@
 - [x] 5.3 Locate the endpoint `POST dashboard/flex-switch/approval-requests/{id}/process` and its corresponding service.
 - [x] 5.4 Implement logic to trigger a notification when the dashboard processes a flex switch approval request.
 - [x] 5.5 Ensure the parameters passed to the notification properly resolve the variables `{{announcement_title}}` and `{{announcement_body}}` to actual formatted content instead of raw template placeholders.
+
+## 6. Enhanced Search Functionality
+
+- [x] 6.1 Locate the `getSwitchToCourses()` method in `FlexSwitchService.php`.
+- [x] 6.2 Update the search query to include module name matching using CONCAT expressions (format: "Module X: DELIVERY_MODE CAMPUS").
+- [x] 6.3 Add campus name and campus code to the search criteria.
+- [x] 6.4 Update OpenAPI documentation in `FlexSwitchController.php` to reflect the enhanced search parameter description.
+- [x] 6.5 Test the search functionality with module and campus search terms (e.g., `?search=module`, `?search=Singapore`, `?search=SGP`).
