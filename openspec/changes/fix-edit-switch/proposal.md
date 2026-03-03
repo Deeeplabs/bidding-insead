@@ -4,7 +4,7 @@ The Flex Switch Class Configuration needs more accurate filtering to ensure stud
 
 ## What Changes
 
-- **Filter Updates**: Ensure `/v2/api/flex-switch-class-configuration` filters courses correctly by Programme, Promotion, and type: Core.
+- **Filter Updates**: Ensure `/v2/api/flex-switch-class-configuration` filters courses correctly by Programme, Promotion, and type: Core. Additionally, exclude classes from the student's own campus from the available switch target list (e.g., if a student is from Abu Dhabi (ABD), they should only see switch options for other campuses like SGP).
 - **API Response**: Add `module` and `term` columns to the `/v2/api/flex-switch-class-configuration` API response.
 - **Validations**: Do not allow students to take courses they have already enrolled in, or courses that have direct schedule conflicts. Enforce `max_submissions_allowed_per_student`.
 - **Rules Verification**: Check and ensure Rules Configuration (specifically Bid Points and Max Submissions per student) are fully implemented for this workflow.

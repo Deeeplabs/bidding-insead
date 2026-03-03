@@ -39,3 +39,9 @@
 - [x] 6.3 Add campus name and campus code to the search criteria.
 - [x] 6.4 Update OpenAPI documentation in `FlexSwitchController.php` to reflect the enhanced search parameter description.
 - [x] 6.5 Test the search functionality with module and campus search terms (e.g., `?search=module`, `?search=Singapore`, `?search=SGP`).
+
+## 7. Campus Exclusion Filter
+
+- [x] 7.1 Locate the query logic that fetches switch target classes (e.g., `getSwitchToCourses()` in `FlexSwitchService.php` or its repository).
+- [x] 7.2 Implement a filter to exclude target classes that share the same campus as the student's current campus.
+- [x] 7.3 Verify that if a student is from the Abu Dhabi (ABD) campus, classes located in ABD do not appear in the available switch options.

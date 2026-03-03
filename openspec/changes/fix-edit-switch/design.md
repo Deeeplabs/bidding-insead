@@ -6,6 +6,7 @@ The Flex Switch feature allows students to switch their enrolled courses. Curren
 
 **Goals:**
 - Update `/v2/api/flex-switch-class-configuration` to filter for Core courses matching the student's Programme and Promotion.
+- Implement a campus exclusion filter so that students only see switch target classes from campuses other than their own (e.g., students from Abu Dhabi will not see Abu Dhabi classes).
 - Enrich the same API endpoint's response DTO to include `module` and `term`.
 - Implement validation checks against existing student enrollments and schedule conflicts during a flex switch request.
 - Ensure bid points and max submission rule configurations are correctly checked and applied.

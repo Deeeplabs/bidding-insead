@@ -11,6 +11,7 @@ The Flex Switch feature had several gaps across filtering, validation, rule enfo
 5. **Unenforced Rule Configuration**: Bid points rules (`deduct_points`, `minimum_points`) and `max_submissions_allowed_per_student` from `FlexSwitchConfiguration` were not evaluated during flex switch submissions.
 6. **No Notifications**: Students received no notification when submitting a flex switch request or when a Programme Manager approved/rejected their request. Notification template variables `{{announcement_title}}` and `{{announcement_body}}` were passed as raw placeholders instead of resolved content.
 7. **Limited Search Functionality**: The `/student/flex-switch/switch-to-courses` endpoint only supported searching by course name, course ID, and section — lacking the ability to search by module or home campus.
+8. **Campus Filtering**: The `/student/flex-switch/switch-to-courses` endpoint allowed students to select switch target classes that were located at their own campus, which contradicted the business logic of flex switches.
 
 ## Solution
 
