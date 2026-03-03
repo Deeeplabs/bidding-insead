@@ -6,9 +6,9 @@ The Flex Switch Class Configuration needs more accurate filtering to ensure stud
 
 - **Filter Updates**: Ensure `/v2/api/flex-switch-class-configuration` filters courses correctly by Programme, Promotion, and type: Core.
 - **API Response**: Add `module` and `term` columns to the `/v2/api/flex-switch-class-configuration` API response.
-- **Validations**: Do not allow students to take courses they have already enrolled in, or courses that have direct schedule conflicts.
-- **Rules Verification**: Check and ensure Rules Configuration (specifically Bid Points) are fully implemented for this workflow.
-- **Notification Triggers**: Add notification triggers to the `POST dashboard/flex-switch/approval-requests/{id}/process` and `POST student/flex-switch/request` endpoints.
+- **Validations**: Do not allow students to take courses they have already enrolled in, or courses that have direct schedule conflicts. Enforce `max_submissions_allowed_per_student`.
+- **Rules Verification**: Check and ensure Rules Configuration (specifically Bid Points and Max Submissions per student) are fully implemented for this workflow.
+- **Notification Triggers**: Add notification triggers to the `POST dashboard/flex-switch/approval-requests/{id}/process` and `POST student/flex-switch/request` endpoints, ensuring content correctly replaces `{{announcement_title}}` and `{{announcement_body}}`.
 
 ## Capabilities
 

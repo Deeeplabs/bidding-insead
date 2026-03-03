@@ -10,6 +10,8 @@
 - [x] 2.1 Locate the existing generic rules validation service or bid points rules service (e.g., `BiddingRuleService` or `CampaignRuleService`).
 - [x] 2.2 Re-use or inject this rule configuration checker into the FlexSwitch process.
 - [x] 2.3 Verify bid points validation runs accurately. No points are subtracted if rules don't permit it, or requirements are enforced per the PM's campaign rules configuration.
+- [x] 2.4 Query the student's existing flex switch submission count for the active context.
+- [x] 2.5 Add validation on `/v2/api/student/flex-switch/request` to reject the request if the student has reached the `max_submissions_allowed_per_student` limit configured in rules.
 
 ## 3. Query & Output Payload Enrichment
 
@@ -27,3 +29,4 @@
 - [x] 5.2 Implement logic to trigger a notification when a student submits a flex switch request.
 - [x] 5.3 Locate the endpoint `POST dashboard/flex-switch/approval-requests/{id}/process` and its corresponding service.
 - [x] 5.4 Implement logic to trigger a notification when the dashboard processes a flex switch approval request.
+- [x] 5.5 Ensure the parameters passed to the notification properly resolve the variables `{{announcement_title}}` and `{{announcement_body}}` to actual formatted content instead of raw template placeholders.

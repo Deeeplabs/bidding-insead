@@ -8,8 +8,8 @@ The Flex Switch feature allows students to switch their enrolled courses. Curren
 - Update `/v2/api/flex-switch-class-configuration` to filter for Core courses matching the student's Programme and Promotion.
 - Enrich the same API endpoint's response DTO to include `module` and `term`.
 - Implement validation checks against existing student enrollments and schedule conflicts during a flex switch request.
-- Ensure bid points rule configurations are correctly checked and applied.
-- Trigger notifications upon submission of a request (`POST student/flex-switch/request`) and processing of an approval request (`POST dashboard/flex-switch/approval-requests/{id}/process`).
+- Ensure bid points and max submission rule configurations are correctly checked and applied.
+- Trigger notifications upon submission of a request (`POST student/flex-switch/request`) and processing of an approval request (`POST dashboard/flex-switch/approval-requests/{id}/process`). Ensure notification payloads correctly resolve `title` and `body` variables.
 
 **Non-Goals:**
 - Completely overhauling the simulation or allocation engine.
@@ -23,8 +23,8 @@ The Flex Switch feature allows students to switch their enrolled courses. Curren
 3. **Conflict Validation**: We will add domain validation logic inside the `FlexSwitchRequest` handling service to:
     - Check the student's existing `Enrollment` / `Bid` state. If already enrolled in the exact target course, throw a validation exception.
     - Check class scheduling to reject conflicting class times.
-4. **Bid Points Rule Verification**: We will inject the existing Bid Points rule checker into the Flex Switch workflow to validate that rules configuration is honored during a flex switch.
-5. **Notification Triggers**: We will add hooks or listeners to dispatch notifications when a student submits a flex switch request, and when a dashboard PM/admin processes an approval request.
+4. **Rules Verification**: We will inject the existing Rules checker into the Flex Switch workflow to validate that rules configuration is honored during a flex switch. Specifically verifying bid points and the `max_submissions_allowed_per_student`.
+5. **Notification Triggers**: We will add hooks or listeners to dispatch notifications when a student submits a flex switch request, and when a dashboard PM/admin processes an approval request. We will also pass the correct data to map `{{announcement_title}}` and `{{announcement_body}}` placeholders in the notification template to fix empty content bugs.
 
 ## Risks / Trade-offs
 

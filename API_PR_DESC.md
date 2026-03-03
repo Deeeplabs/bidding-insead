@@ -1,46 +1,56 @@
-# Fix Edit Switch Validation and API Enrichment
+# Fix Edit Switch — Validation, API Enrichment & Notifications
 
 ## Problem
-The `fix-edit-switch` feature required stricter filtering, enriched API responses, comprehensive domain validations, and notification triggers to prevent invalid student enrollment switches and keep students informed. The original implementation was missing critical rule evaluations, suffered from architecture divergence, and lacked automated communication.
 
-1. **Filtering & Payload Weakness**: The `/v2/api/flex-switch-class-configuration` endpoint did not strictly filter by the selected Programme, Promotion, or Core `courseType`. Additionally, essential `module` and `term` details were missing from the response payloads.
-2. **Missing Rule Validations**: Bid points configurations mapped by the PM natively to `FlexSwitchConfiguration` were completely ignored during flex switch submissions, allowing students to switch regardless of campaign point constraints.
-3. **Architecture Adherence**: Validations for matching "Already Enrolled" courses and identifying "Schedule Conflicts" were built generically in the `FlexSwitchController` layer as basic Doctrine Queries rather than being encapsulated within the domain components, creating business logic leakage.
-4. **Missing Notifications**: Students were not notified when they explicitly submitted a flex switch request or when the Programme Manager subsequently processed (approved/rejected) their request, resulting in a disconnected user experience.
+The Flex Switch feature had several gaps across filtering, validation, rule enforcement, and communication:
+
+1. **Incomplete Filtering**: The `/v2/api/flex-switch-class-configuration` endpoint did not strictly filter by Programme, Promotion, or Core course type (`courseType.id = 6`), allowing non-Core or unrelated courses to appear in the configuration list.
+2. **Missing Response Fields**: The same endpoint's response payload lacked `module` and `term` details required by the frontend for proper display.
+3. **No Enrollment Validation**: Students could submit a flex switch request targeting a course they were already enrolled in, leading to duplicate enrollments.
+4. **No Schedule Conflict Detection**: There was no check against the student's active enrolled classes for scheduling conflicts before allowing a switch.
+5. **Unenforced Rule Configuration**: Bid points rules (`deduct_points`, `minimum_points`) and `max_submissions_allowed_per_student` from `FlexSwitchConfiguration` were not evaluated during flex switch submissions.
+6. **No Notifications**: Students received no notification when submitting a flex switch request or when a Programme Manager approved/rejected their request. Notification template variables `{{announcement_title}}` and `{{announcement_body}}` were passed as raw placeholders instead of resolved content.
 
 ## Solution
-Centralized flex switch validations natively into the Domain services, tightened entity resolution, enforced PM rule configurations, enriched the API response payloads safely, and integrated automated notification triggers.
+
+Centralized all flex switch validations into the domain service layer, enriched the API response with promotion period metadata, enforced PM-configured rules, and integrated notification triggers with properly resolved content.
 
 ### Changes Made
 
 **Modified Files:**
 
 1. **`src/Service/FlexSwitch/PM/FlexSwitchService.php`**
-   - Modified `listClassConfiguration()` to strictly enforce filtering against `program_id` and `promotion_id` parameters passed in mapping to the promotion constraints.
-   - Updated the data transfer query (DQL) selecting the promotion period's `term` metadata utilizing `MAX(pp.term)` property mapping.
+   - Updated `listClassConfiguration()` query to enforce `courseType.id = 6` (Core) filtering.
+   - Added `program_id` and `promotion_id` filter support via `cp.promotion` and `pFilter.program` joins.
+   - Added `MAX(pp.period) as module` and `MAX(pp.term) as term` to the SELECT clause, joining `classPromotions → promotionPeriod`.
+   - Mapped `module` and `term` values into `FlexSwitchClassConfigurationItemDto` in the result transformer loop.
 
-2. **`src/Controller/Api/FlexSwitch/FlexSwitchController.php`**
-   - Successfully bound request parsing logic to strictly inject `program_id` and `promotion_id` parameters from `$request->query` for consumption by `PM\FlexSwitchService::listClassConfiguration()`.
+2. **`src/Domain/FlexSwitch/FlexSwitchClassConfigurationItemDto.php`**
+   - Added nullable `$module` (string) and `$term` (string) properties with OpenAPI annotations. Additive change — backward compatible.
 
-3. **`src/Domain/FlexSwitch/FlexSwitchClassConfigurationItemDto.php`**
-   - Appended a new optional string attribute for `$term` properties supporting API structure rendering logic.
+3. **`src/Controller/Api/FlexSwitch/FlexSwitchController.php`**
+   - Passes `program_id` and `promotion_id` from query parameters into the `listClassConfiguration()` filter array.
 
 4. **`src/Service/FlexSwitch/FlexSwitchService.php`**
-   - Implemented standard `submitRequest()` domain logic entirely encapsulating validation workflows.
-   - Migrated "Schedule Conflicts" array checking from DQL logic deep into the structured domain block parsing target class constraints mapping actively enrolled objects seamlessly.
-   - Migrated "Already Enrolled" overlap DQL checks cleanly into the domain layer enforcing the swap operation accurately queries the distinct Target node rejecting duplicate core enrollments natively.
-   - Enforced **FlexSwitch Rule Configuration** queries mapping the student's current `Promotion` against `rules.deduct_points` and `rules.minimum_points`. Blocks switches throwing `\DomainException` if the capital threshold falls below minimum.
-   - Injected the `NotificationService` to send a `CUSTOM_ANNOUNCEMENT` notification back to the student upon successful flex switch request submission.
+   - Implemented `submitRequest()` with full domain validation pipeline:
+     - **Already Enrolled check**: Queries `Bid` entity for enrolled status on the target course (skipped for same-course section switches). Throws `\DomainException` on duplicate.
+     - **Schedule Conflict check**: Queries active enrolled bids (excluding the from-class), compares `classConflicts` arrays bidirectionally between target and enrolled classes. Throws `\DomainException` with conflicting course name.
+     - **Bid Points Rule check**: Loads `FlexSwitchConfiguration` by student's promotion, evaluates `rules.deduct_points` and `rules.minimum_points` against student's remaining capital. Throws `\DomainException` if insufficient.
+     - **Max Submissions check**: Counts existing flex switch submissions for the student and rejects if `max_submissions_allowed_per_student` limit is reached.
+   - Injected `NotificationService` and `UserRepository` via constructor.
+   - After successful request creation, triggers a `CUSTOM_ANNOUNCEMENT` notification to the student with resolved `announcement_title` ("Flex Switch Request Submitted") and `announcement_body` (includes actual from/to course names).
 
 5. **`src/Controller/Api/Student/FlexSwitch/FlexSwitchController.php`**
-   - Purged all leaked Doctrine Queries and generic validations out of the Web boundary `submitRequest()`.
-   - Replaced extensive validation logic with a single call to `flexSwitchService->submitRequest()`, cleanly mapping isolated `\DomainException`s back natively to the expected HTTP 400 JSON standard (`INVALID_CLASS`, `ALREADY_ENROLLED`, `SCHEDULE_CONFLICT`, `INSUFFICIENT_POINTS`).
+   - Delegates all validation to `flexSwitchService->submitRequest()`.
+   - Maps `\DomainException` to HTTP 400 JSON responses.
 
 6. **`src/Service/FlexSwitchApprovalService.php`**
-   - Injected the `NotificationService` and securely hooked it into `processApproval()` to trigger a `CUSTOM_ANNOUNCEMENT` notification to the student outlining the request action (approved/rejected) and any PM remarks.
+   - Injected `NotificationService` via constructor.
+   - After `processApproval()` completes, triggers a `CUSTOM_ANNOUNCEMENT` notification to the student with resolved `announcement_title` ("Flex Switch Request Approved/Rejected") and `announcement_body` (includes from/to course names, action status, and PM remarks).
 
 ## Impact
-- **Data Completeness:** API consumers strictly receive `module`, `term` and `location` details properly correlated to PM promotion periods for Class matching.
-- **System Integrity:** Flex switch backend strictly filters available swapping combinations dynamically matching the student's configured Promotion and restricted to core courses.
-- **Application Coherence:** Business rules validating target overlaps, schedule conflicts, and active rule configurations (capital point validations) are reliably processed and locked securely at the correct domain service abstraction layer eliminating bypassing flaws.
-- **Improved User Experience:** Students receive immediate system notifications verifying their flex switch request submissions and the final approval/rejection resolution directly from the Programme Manager.
+
+- **API Response Enrichment**: `/v2/api/flex-switch-class-configuration` now returns `module` and `term` fields per class configuration item. No existing fields removed — purely additive.
+- **Stricter Filtering**: Only Core courses matching the student's Programme and Promotion are returned, preventing invalid switch targets.
+- **Domain Validation**: Enrollment duplicates, schedule conflicts, bid point thresholds, and submission limits are all enforced at the service layer before request creation.
+- **Notification Coverage**: Students receive immediate notifications on flex switch request submission and on approval/rejection processing, with fully resolved content (no raw template placeholders).
