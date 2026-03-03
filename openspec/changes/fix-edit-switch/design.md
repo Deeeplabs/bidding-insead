@@ -9,7 +9,7 @@ The Flex Switch feature allows students to switch their enrolled courses. Curren
 - Enrich the same API endpoint's response DTO to include `module` and `term`.
 - Implement validation checks against existing student enrollments and schedule conflicts during a flex switch request.
 - Ensure bid points and max submission rule configurations are correctly checked and applied.
-- Trigger notifications upon submission of a request (`POST student/flex-switch/request`) and processing of an approval request (`POST dashboard/flex-switch/approval-requests/{id}/process`). Ensure notification payloads correctly resolve `title` and `body` variables.
+- Trigger notifications upon submission of a request (`POST student/flex-switch/request`) to both the student and their Programme Managers, and upon processing of an approval request (`POST dashboard/flex-switch/approval-requests/{id}/process`). Ensure notification payloads correctly resolve `title` and `body` variables.
 - Enhance the `/student/flex-switch/switch-to-courses` endpoint to support searching by module name and campus (home campus) in addition to course name, course ID, and section.
 
 **Non-Goals:**
@@ -25,7 +25,7 @@ The Flex Switch feature allows students to switch their enrolled courses. Curren
     - Check the student's existing `Enrollment` / `Bid` state. If already enrolled in the exact target course, throw a validation exception.
     - Check class scheduling to reject conflicting class times.
 4. **Rules Verification**: We will inject the existing Rules checker into the Flex Switch workflow to validate that rules configuration is honored during a flex switch. Specifically verifying bid points and the `max_submissions_allowed_per_student`.
-5. **Notification Triggers**: We will add hooks or listeners to dispatch notifications when a student submits a flex switch request, and when a dashboard PM/admin processes an approval request. We will also pass the correct data to map `{{announcement_title}}` and `{{announcement_body}}` placeholders in the notification template to fix empty content bugs.
+5. **Notification Triggers**: We will add hooks or listeners to dispatch notifications to the student and their Programme Managers when a flex switch request is submitted, and to the student when a dashboard PM/admin processes an approval request. We will also pass the correct data to map `{{announcement_title}}` and `{{announcement_body}}` placeholders in the notification template to fix empty content bugs.
 6. **Enhanced Search**: We will extend the search query in `getSwitchToCourses()` to include:
     - Module name matching (e.g., "Module 1", "Module 2")
     - Campus name matching (e.g., "Singapore", "France")

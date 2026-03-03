@@ -26,10 +26,11 @@
 ## 5. Notification Triggers
 
 - [x] 5.1 Locate the endpoint `POST student/flex-switch/request` and its corresponding service.
-- [x] 5.2 Implement logic to trigger a notification when a student submits a flex switch request.
-- [x] 5.3 Locate the endpoint `POST dashboard/flex-switch/approval-requests/{id}/process` and its corresponding service.
-- [x] 5.4 Implement logic to trigger a notification when the dashboard processes a flex switch approval request.
-- [x] 5.5 Ensure the parameters passed to the notification properly resolve the variables `{{announcement_title}}` and `{{announcement_body}}` to actual formatted content instead of raw template placeholders.
+- [x] 5.2 Implement logic to trigger a notification to the student when a flex switch request is submitted.
+- [x] 5.3 Implement logic to trigger a notification to the Programme Managers (PMs) of the student's program when a flex switch request is submitted.
+- [x] 5.4 Locate the endpoint `POST dashboard/flex-switch/approval-requests/{id}/process` and its corresponding service.
+- [x] 5.5 Implement logic to trigger a notification when the dashboard processes a flex switch approval request.
+- [x] 5.6 Ensure the parameters passed to the notification properly resolve the variables `{{announcement_title}}` and `{{announcement_body}}` to actual formatted content instead of raw template placeholders.
 
 ## 6. Enhanced Search Functionality
 

@@ -40,6 +40,7 @@ Centralized all flex switch validations into the domain service layer, enriched 
      - **Max Submissions check**: Counts existing flex switch submissions for the student and rejects if `max_submissions_allowed_per_student` limit is reached.
    - Injected `NotificationService` and `UserRepository` via constructor.
    - After successful request creation, triggers a `CUSTOM_ANNOUNCEMENT` notification to the student with resolved `announcement_title` ("Flex Switch Request Submitted") and `announcement_body` (includes actual from/to course names).
+   - Triggers an additional `CUSTOM_ANNOUNCEMENT` bulk notification to all Programme Managers associated with the student's program to alert them of the new flex switch request.
    - Enhanced `getSwitchToCourses()` with expanded search functionality supporting:
      - Course name (existing)
      - Course ID (existing)
@@ -62,5 +63,5 @@ Centralized all flex switch validations into the domain service layer, enriched 
 - **API Response Enrichment**: `/v2/api/flex-switch-class-configuration` now returns `module` and `term` fields per class configuration item. No existing fields removed — purely additive.
 - **Stricter Filtering**: Only Core courses matching the student's Programme and Promotion are returned, preventing invalid switch targets.
 - **Domain Validation**: Enrollment duplicates, schedule conflicts, bid point thresholds, and submission limits are all enforced at the service layer before request creation.
-- **Notification Coverage**: Students receive immediate notifications on flex switch request submission and on approval/rejection processing, with fully resolved content (no raw template placeholders).
+- **Notification Coverage**: Students and Programme Managers receive immediate notifications on flex switch request submission and on approval/rejection processing, with fully resolved content (no raw template placeholders).
 - **Enhanced Search**: The `search` query parameter on `/student/flex-switch/switch-to-courses` now supports searching by module name and campus (name or code), in addition to existing course name, course ID, and section searches. Example: `?from_class_id=19142&search=module`

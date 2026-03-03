@@ -22,3 +22,15 @@ The system MUST support searching by module name and campus (home campus) in add
 #### Scenario: Combined Search
 - **WHEN** a student provides `search=Module 1 Singapore`
 - **THEN** the system SHALL return courses matching either the module OR the campus criteria
+
+### Requirement: Flex Switch Notifications
+The system MUST dispatch appropriately formatted notifications when flex switch requests are submitted or processed.
+
+#### Scenario: Submitting a request
+- **WHEN** a student submits a flex switch request
+- **THEN** they MUST immediately receive a notification confirming the submission, with `announcement_title` and `announcement_body` placeholders resolved.
+- **AND** all Programme Managers associated with the student's programme MUST receive a bulk notification alerting them to the new request.
+
+#### Scenario: Processing an approval
+- **WHEN** a PM or admin processes a flex switch approval request
+- **THEN** the student MUST receive a notification confirming the approval or rejection, with the placeholders appropriately resolved.
