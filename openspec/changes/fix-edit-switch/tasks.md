@@ -52,4 +52,5 @@
 - [x] 8.2 Fix parameter name mismatch in `FlexSwitchController::listClassConfiguration()`: the controller reads `program_id` / `promotion_id` but the frontend sends `programmeId` / `promotionId`. Add fallback to accept both naming conventions.
 - [ ] 8.3 Update `useListClassConfiguration` hook in `use-flex-switch.ts` to use a proper type that includes all filter fields (`campus_ids`, `seat_min`, `seat_max`, `credit_min`, `credit_max`, `modes`) instead of the restrictive `ParamsApprovalSwitch` type.
 - [x] 8.4 Fix duplicate DQL alias `cp3` in the count query: when both `seat_min` and `seat_max` are set, the same subquery builder reused alias `cp3` for both conditions, causing Doctrine `QueryException: 'cp3' is already defined`. Fix: use separate aliases `cp3` (min) and `cp4` (max).
-- [ ] 8.5 Verify the `/v2/api/flex-switch-class-configuration` endpoint with campus and seat filters returns 200 with correct data.
+- [x] 8.5 Fix Symfony `InputBag::get()` for array parameters: `campus_ids` and `modes` are sent as `campus_ids[]=5` (arrays), but `$request->query->get()` throws `BadRequestException` for non-scalar values in Symfony 5.1+/6+. Fix: use `$request->query->all('campus_ids')` and `$request->query->all('modes')`.
+- [ ] 8.6 Verify the `/v2/api/flex-switch-class-configuration` endpoint with campus and seat filters returns 200 with correct data.

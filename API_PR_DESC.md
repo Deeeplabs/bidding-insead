@@ -15,6 +15,7 @@ The Flex Switch feature had several gaps across filtering, validation, rule enfo
 9. **Seat Capacity Filter Broken (400)**: The `listClassConfiguration()` query used Doctrine's `having()` for both `seat_min` and `seat_max` conditions. `having()` replaces the entire HAVING clause, so when both values were provided the first condition was silently dropped and the orphaned `:seatMin` parameter caused a `QueryException`.
 10. **Parameter Name Mismatch (400)**: The controller read `program_id` / `promotion_id` (snake_case) but the frontend sent `programmeId` / `promotionId` (camelCase), so programme and promotion filters were never applied.
 11. **Duplicate DQL Alias (500)**: The count query for seat capacity filtering reused the same subquery alias `cp3` for both `seat_min` and `seat_max` conditions. When both were provided, Doctrine threw `QueryException: 'cp3' is already defined`.
+12. **Array Query Parameters (400)**: `campus_ids` and `modes` are sent as arrays (`campus_ids[]=5`), but the controller used `$request->query->get()` which throws Symfony's `BadRequestException: Input value "campus_ids" contains a non-scalar value` in Symfony 5.1+/6+.
 
 ## Solution
 
@@ -38,6 +39,7 @@ Centralized all flex switch validations into the domain service layer, enriched 
 3. **`src/Controller/Api/FlexSwitch/FlexSwitchController.php`**
    - Passes `program_id` and `promotion_id` from query parameters into the `listClassConfiguration()` filter array.
    - **Fixed parameter name mismatch**: Added fallback to accept both `programmeId`/`promotionId` (camelCase) and `program_id`/`promotion_id` (snake_case) query parameters, so the frontend filters are correctly applied.
+   - **Fixed array parameter handling**: Changed `$request->query->get('campus_ids')` and `->get('modes')` to `$request->query->all('campus_ids')` and `->all('modes')` to correctly handle array query parameters (`campus_ids[]=5`) without triggering Symfony's `BadRequestException`.
 
 4. **`src/Service/FlexSwitch/FlexSwitchService.php`**
    - Implemented `submitRequest()` with full domain validation pipeline:
@@ -69,7 +71,7 @@ Centralized all flex switch validations into the domain service layer, enriched 
 
 - **API Response Enrichment**: `/v2/api/flex-switch-class-configuration` now returns `module` and `term` fields per class configuration item. No existing fields removed — purely additive.
 - **Stricter Filtering**: Only Core courses matching the student's Programme and Promotion are returned, preventing invalid switch targets.
-- **Filter Bug Fixes**: Seat capacity filter (`seat_min` + `seat_max`) and campus filter (`campus_ids`) on `/v2/api/flex-switch-class-configuration` now work correctly. The HAVING clause properly combines both conditions, the count query uses distinct subquery aliases, and the controller accepts both camelCase and snake_case parameter names.
+- **Filter Bug Fixes**: Seat capacity filter (`seat_min` + `seat_max`) and campus filter (`campus_ids`) on `/v2/api/flex-switch-class-configuration` now work correctly. The HAVING clause properly combines both conditions, the count query uses distinct subquery aliases, array parameters use `InputBag::all()`, and the controller accepts both camelCase and snake_case parameter names.
 - **Domain Validation**: Enrollment duplicates, schedule conflicts, bid point thresholds, and submission limits are all enforced at the service layer before request creation.
 - **Notification Coverage**: Students and Programme Managers receive immediate notifications on flex switch request submission and on approval/rejection processing, with fully resolved content (no raw template placeholders).
 - **Enhanced Search**: The `search` query parameter on `/student/flex-switch/switch-to-courses` now supports searching by module name and campus (name or code), in addition to existing course name, course ID, and section searches. Example: `?from_class_id=19142&search=module`
