@@ -33,6 +33,11 @@ The Flex Switch feature allows students to switch their enrolled courses. Curren
     - Campus code matching (e.g., "SGP", "FRA")
     This will use CONCAT expressions to match the module format stored in the database and LIKE queries for campus fields.
 
+## Decisions (Addendum — Filter Bugs)
+
+7. **HAVING Clause Fix**: Use `andHaving()` instead of `having()` for the second seat condition to prevent replacing the first.
+8. **Parameter Name Alignment**: Controller will accept both `program_id`/`programmeId` and `promotion_id`/`promotionId` via fallback.
+
 ## Risks / Trade-offs
 
 - **Risk: Breaking Frontend Clients** → Mitigation: All fields added to the DTOs are strictly additive. No existing fields will be removed.

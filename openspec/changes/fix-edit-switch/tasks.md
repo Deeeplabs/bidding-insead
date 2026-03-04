@@ -45,3 +45,10 @@
 - [x] 7.1 Locate the query logic that fetches switch target classes (e.g., `getSwitchToCourses()` in `FlexSwitchService.php` or its repository).
 - [x] 7.2 Implement a filter to exclude target classes that share the same campus as the student's current campus.
 - [x] 7.3 Verify that if a student is from the Abu Dhabi (ABD) campus, classes located in ABD do not appear in the available switch options.
+
+## 8. Fix Class Configuration Filters (400 Errors)
+
+- [x] 8.1 Fix HAVING clause bug in `FlexSwitchService::listClassConfiguration()`: replace `having()` with `andHaving()` for the second seat condition so both `seat_min` and `seat_max` work together. The current code uses `having()` which replaces the previous HAVING clause, leaving an orphaned `:seatMin` parameter that causes a Doctrine `QueryException`.
+- [x] 8.2 Fix parameter name mismatch in `FlexSwitchController::listClassConfiguration()`: the controller reads `program_id` / `promotion_id` but the frontend sends `programmeId` / `promotionId`. Add fallback to accept both naming conventions.
+- [x] 8.3 Update `useListClassConfiguration` hook in `use-flex-switch.ts` to use a proper type that includes all filter fields (`campus_ids`, `seat_min`, `seat_max`, `credit_min`, `credit_max`, `modes`) instead of the restrictive `ParamsApprovalSwitch` type.
+- [ ] 8.4 Verify the `/v2/api/flex-switch-class-configuration` endpoint with campus and seat filters returns 200 with correct data.
