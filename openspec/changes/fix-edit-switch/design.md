@@ -37,6 +37,7 @@ The Flex Switch feature allows students to switch their enrolled courses. Curren
 
 7. **HAVING Clause Fix**: Use `andHaving()` instead of `having()` for the second seat condition to prevent replacing the first.
 8. **Parameter Name Alignment**: Controller will accept both `program_id`/`programmeId` and `promotion_id`/`promotionId` via fallback.
+9. **Count Query Alias Collision**: The count query's seat subqueries both used alias `cp3`. When both `seat_min` and `seat_max` are set, Doctrine rejects the duplicate. Fix: use `cp3` for min and `cp4` for max.
 
 ## Risks / Trade-offs
 

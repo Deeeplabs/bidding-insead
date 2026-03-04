@@ -14,6 +14,7 @@ The Flex Switch feature had several gaps across filtering, validation, rule enfo
 8. **Campus Filtering**: The `/student/flex-switch/switch-to-courses` endpoint allowed students to select switch target classes that were located at their own campus, which contradicted the business logic of flex switches.
 9. **Seat Capacity Filter Broken (400)**: The `listClassConfiguration()` query used Doctrine's `having()` for both `seat_min` and `seat_max` conditions. `having()` replaces the entire HAVING clause, so when both values were provided the first condition was silently dropped and the orphaned `:seatMin` parameter caused a `QueryException`.
 10. **Parameter Name Mismatch (400)**: The controller read `program_id` / `promotion_id` (snake_case) but the frontend sent `programmeId` / `promotionId` (camelCase), so programme and promotion filters were never applied.
+11. **Duplicate DQL Alias (500)**: The count query for seat capacity filtering reused the same subquery alias `cp3` for both `seat_min` and `seat_max` conditions. When both were provided, Doctrine threw `QueryException: 'cp3' is already defined`.
 
 ## Solution
 
@@ -29,6 +30,7 @@ Centralized all flex switch validations into the domain service layer, enriched 
    - Added `MAX(pp.period) as module` and `MAX(pp.term) as term` to the SELECT clause, joining `classPromotions → promotionPeriod`.
    - Mapped `module` and `term` values into `FlexSwitchClassConfigurationItemDto` in the result transformer loop.
    - **Fixed HAVING clause bug**: Changed `having()` to `andHaving()` for seat capacity conditions so both `seat_min` and `seat_max` work together without the second call replacing the first.
+   - **Fixed duplicate alias in count query**: Split the shared `cp3` subquery into two separate subqueries with distinct aliases (`cp3` for `seat_min`, `cp4` for `seat_max`) to avoid Doctrine's `'cp3' is already defined` error.
 
 2. **`src/Domain/FlexSwitch/FlexSwitchClassConfigurationItemDto.php`**
    - Added nullable `$module` (string) and `$term` (string) properties with OpenAPI annotations. Additive change — backward compatible.
@@ -67,7 +69,7 @@ Centralized all flex switch validations into the domain service layer, enriched 
 
 - **API Response Enrichment**: `/v2/api/flex-switch-class-configuration` now returns `module` and `term` fields per class configuration item. No existing fields removed — purely additive.
 - **Stricter Filtering**: Only Core courses matching the student's Programme and Promotion are returned, preventing invalid switch targets.
-- **Filter Bug Fixes**: Seat capacity filter (`seat_min` + `seat_max`) and campus filter (`campus_ids`) on `/v2/api/flex-switch-class-configuration` now work correctly. The HAVING clause properly combines both conditions, and the controller accepts both camelCase and snake_case parameter names.
+- **Filter Bug Fixes**: Seat capacity filter (`seat_min` + `seat_max`) and campus filter (`campus_ids`) on `/v2/api/flex-switch-class-configuration` now work correctly. The HAVING clause properly combines both conditions, the count query uses distinct subquery aliases, and the controller accepts both camelCase and snake_case parameter names.
 - **Domain Validation**: Enrollment duplicates, schedule conflicts, bid point thresholds, and submission limits are all enforced at the service layer before request creation.
 - **Notification Coverage**: Students and Programme Managers receive immediate notifications on flex switch request submission and on approval/rejection processing, with fully resolved content (no raw template placeholders).
 - **Enhanced Search**: The `search` query parameter on `/student/flex-switch/switch-to-courses` now supports searching by module name and campus (name or code), in addition to existing course name, course ID, and section searches. Example: `?from_class_id=19142&search=module`
