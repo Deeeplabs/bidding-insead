@@ -1,56 +1,84 @@
 ## Context
 
-The PM admin panel's Switch → All Courses tab uses `GET /flex-switch/list-course` to display a paginated list of classes. The request flows through:
+The PM admin panel's Switch → All Courses tab uses `GET /flex-switch/list-course` to display a paginated, filterable list of classes. The request flows through:
 
-1. **Controller**: `FlexSwitchController::listCourse()` → builds filter groups, calls service
+1. **Controller**: `FlexSwitchController::listCourse()` → reads query params, builds `FilterGroup`/`FilterItem` objects, calls service
 2. **Service**: `FlexSwitchService::listCourse()` → calls `ClassService::getList()` with a `PaginationList`
-3. **Repository**: `ClassesRepository::searchQueryPaginated()` → builds a DQL query with JOINs
-4. **Pagination**: `PaginatedResult` → uses Doctrine's `Paginator->count()` for totals
+3. **Repository**: `ClassesRepository::searchQueryPaginated()` → builds a DQL query with JOINs and pagination
 
-**The bug**: `searchQueryPaginated()` uses `LEFT JOIN` on `classPromotions` (`cp`) and `promotion` (`p`), then `GROUP BY cl.id, c.id, s.id, ct.id, cam.id, stat.id, cp.id, p.id`. When a class has multiple promotion associations (multiple `class_promotions` rows), the GROUP BY produces one row per class+promotion pair. Doctrine's `Paginator->count()` wraps the grouped query as `SELECT COUNT(*) FROM (SELECT ... GROUP BY ...)`, counting the number of groups — not the number of distinct classes.
+**The bug**: When the frontend sends array query parameters (e.g., `campus_ids[]=2`), PHP parses them into arrays. In Symfony 6.4, `InputBag::get()` throws `BadRequestHttpException` with the message _"Input value \"campus_ids\" contains a non-scalar value."_ when attempting to retrieve an array value. This exception is thrown at the framework level — before any controller logic executes.
 
-This means `totalRecords` is inflated, making `totalPages` too high. Navigating past the actual data range returns empty results ("No records found").
+The controller code at line 134 (`$campusIds = $request->query->get('campus_ids')`) already has correct downstream handling for arrays, but it never reaches that logic because Symfony rejects the call.
 
-**Frontend**: `ListCourseFlex` component (`bidding-admin/src/components/flex-switch/course-flex-list.tsx`) uses Ant Design's `<Pagination>` which relies on `pagination.total` from the API response. The frontend is correctly implemented — the bug is purely in the backend count.
+**Affected methods** (all in `FlexSwitchController`):
+- `listCourse()` — `campus_ids` (line 134), `modes` (line 159)
+- `listClassConfiguration()` — `campus_ids` (line 41), `modes` (line 42)
+- `moduleDetail()` — `campus_ids` (line 358)
+
+**Frontend**: `ListCourseFlex` component sends `campus_ids` as `number[]` and `mode` as `string[]` via axios, which serializes them as `campus_ids[]=2&mode[]=online`. This is standard PHP array notation and is the correct client behavior.
+
+**Exception handling**: `ExceptionSubscriber` catches the `BadRequestHttpException` (which implements `HttpExceptionInterface` with status 400) and formats it using the standard `ApiResponse` / `ApiError` envelope with code `BAD_REQUEST`.
 
 ## Goals / Non-Goals
 
 **Goals:**
-- Fix the pagination count in `searchQueryPaginated()` so that `totalRecords` reflects the actual number of distinct class rows returned by the query
-- Ensure the fix works with all existing filter combinations (search, credit, seat, campus, mode)
-- Ensure the fix works for both the standard mode and the `_campaign_group_mode` / `_unique_by_course` special modes
+- Fix array parameter retrieval in all affected `FlexSwitchController` methods so campus and mode filters work
+- Ensure backward compatibility with both array notation (`campus_ids[]=2`) and JSON/comma-separated string formats that the existing code already handles
+- Apply the fix consistently to all three affected methods
 
 **Non-Goals:**
 - Changing the API response shape
-- Changing the frontend pagination behavior
-- Fixing pagination in other endpoints (e.g., `listClassConfiguration`)
-- Adding new filters or functionality
+- Changing the frontend parameter serialization
+- Modifying the `ExceptionSubscriber` error handling
+- Fixing unrelated issues (pagination count, etc.)
 
 ## Decisions
 
-### Decision 1: Use a custom count query instead of relying on Doctrine Paginator's built-in count
+### Decision 1: Use `$request->query->all()` for array parameters
 
-**Rationale**: Doctrine's `Paginator->count()` doesn't handle `GROUP BY` well — it wraps the query in `SELECT COUNT(*) FROM (...)` which counts group rows, not distinct entities. Rather than trying to work around Doctrine's behavior, we'll compute the count separately.
+**Rationale**: Symfony's `InputBag::all(string $key)` is the designated method for retrieving array values from query parameters. Unlike `get()`, it does not throw on non-scalar values. When the key is absent, it returns an empty array `[]`.
 
-**Approach**: Modify `searchQueryPaginated()` to:
-1. Build a separate count query (clone the base query before pagination is applied)
-2. Use `SELECT COUNT(DISTINCT cl.id)` to get the true number of distinct classes
-3. Remove the `GROUP BY` from the count query (since we only need DISTINCT count)
-4. Pass the pre-computed count to `PaginatedResult` so it doesn't use `Paginator->count()`
+**Approach**: In each affected method, replace:
+```php
+$campusIds = $request->query->get('campus_ids');
+```
+with:
+```php
+$campusIds = $request->query->all('campus_ids');
+```
 
-### Decision 2: Extend PaginatedResult to accept an optional pre-computed total
+Then simplify the downstream handling: `all()` always returns an array, so the `is_string` / `json_decode` / `explode` branches are no longer needed for the array-notation case. However, to maintain backward compatibility with comma-separated string format (e.g., `campus_ids=1,2,3`), we keep a fallback. Since `all()` returns `['1,2,3']` (single-element array) for scalar input, we check if the first element contains commas and explode if needed.
 
-**Rationale**: `PaginatedResult` currently always calls `$this->paginator->count()`. We need to allow passing in a pre-computed total for cases where the Paginator's built-in count is inaccurate.
+### Decision 2: Simplify the array parameter handling pattern
 
-**Approach**: Add an optional `?int $totalOverride = null` parameter to `PaginatedResult`. When provided, use it instead of `$this->paginator->count()`.
+**Rationale**: The current code has complex branching (`is_string` → `json_decode` → `explode`, `is_array` check). With `all()` always returning an array, we can simplify to a single clean pattern.
 
-### Decision 3: File locations
+**Approach**: For `campus_ids` in `listCourse()`:
+```php
+$campusIds = $request->query->all('campus_ids');
+if (!empty($campusIds)) {
+    // Handle case where a single comma-separated string was passed
+    if (count($campusIds) === 1 && is_string($campusIds[0]) && str_contains($campusIds[0], ',')) {
+        $campusIds = explode(',', $campusIds[0]);
+    }
+    // ... build FilterItem objects as before
+}
+```
 
-- `src/Repository/PaginatedResult.php` — add `$totalOverride` parameter
-- `src/Repository/ClassesRepository.php` — modify `searchQueryPaginated()` to compute a separate count and pass it as `$totalOverride`
+Same pattern for `modes`.
+
+### Decision 3: Apply consistently to `listClassConfiguration()` and `moduleDetail()`
+
+**Rationale**: These methods use the same `$request->query->get('campus_ids')` pattern and will hit the same error when array params are sent.
+
+**Approach**: Apply the same `get()` → `all()` fix in both methods.
+
+### Decision 4: File locations
+
+- `src/Controller/Api/FlexSwitch/FlexSwitchController.php` — the only file that needs changes (three methods)
 
 ## Risks / Trade-offs
 
-- **Risk**: The separate count query adds one additional SQL query per request. **Mitigation**: The count query uses `COUNT(DISTINCT cl.id)` which is simple and uses the same indexes as the main query. The performance impact is negligible.
-- **Risk**: Filters need to be applied consistently to both the main query and the count query. **Mitigation**: The count query is cloned from the main query builder after filters are applied but before pagination, ensuring consistency.
-- **Trade-off**: We modify `PaginatedResult` which is used by other paginated queries. **Mitigation**: The `$totalOverride` is optional and defaults to `null`, preserving existing behavior for all other callers.
+- **Risk**: `all()` returns `[]` instead of `null` when the key is absent. **Mitigation**: We use `!empty($campusIds)` which handles both `null` and `[]` correctly. The downstream filter-building code already checks for non-empty arrays.
+- **Risk**: Backward compatibility with string-format params (e.g., `campus_ids=1,2,3`). **Mitigation**: We add a fallback that explodes comma-separated strings from the single-element array that `all()` returns for scalar values.
+- **Low risk**: This is a one-file change in the controller layer only — no service, repository, or entity changes needed.

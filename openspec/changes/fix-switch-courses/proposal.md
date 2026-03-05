@@ -1,14 +1,22 @@
 ## Why
 
-In the PM admin panel under Switch → All Courses, pagination is broken when changing rows per page to 100. The total page count reports more pages than actually contain data — navigating to the last pages (e.g., page 69) shows "No records found" until going back to around page 66.
+In the PM admin panel under Switch → All Courses, filtering by campus causes a 400 Bad Request error. When the frontend sends `campus_ids[]=2` as a query parameter, the endpoint returns:
 
-**Root cause**: The `ClassesRepository::searchQueryPaginated()` method uses `LEFT JOIN` on `classPromotions` and `promotion`, with a `GROUP BY` that includes `cp.id` and `p.id`. When a class has multiple promotion associations, the same class appears as multiple rows (one per promotion). Doctrine's `Paginator->count()` counts these inflated rows, producing a `totalRecords` and `totalPages` higher than the actual number of distinct classes. When the user navigates to pages beyond the real data range, the query returns empty results.
+```json
+{
+  "success": false,
+  "message": "Input value \"campus_ids\" contains a non-scalar value.",
+  "error": { "code": "BAD_REQUEST" }
+}
+```
 
-The `fetchJoinCollection: true` flag in the Paginator helps deduplicate the actual results returned on each page, but the **count query** still counts the inflated row set, leading to phantom pages at the end.
+**Root cause**: Symfony 6.4's `InputBag::get()` throws `BadRequestHttpException` when the query parameter value is non-scalar (i.e., an array). The frontend (`bidding-admin`) sends `campus_ids` as `number[]` via axios, which serializes to `campus_ids[]=2` in the URL. PHP parses this as an array. When `FlexSwitchController::listCourse()` calls `$request->query->get('campus_ids')` (line 134), Symfony throws before the controller logic ever runs. The `ExceptionSubscriber` catches this and formats it as the error response above.
+
+The same vulnerability exists for the `modes` parameter (line 159), and in two other controller methods: `listClassConfiguration()` (line 41) and `moduleDetail()` (line 358).
 
 ## What Changes
 
-Fix the pagination count in the `searchQueryPaginated` method to accurately count distinct classes rather than inflated joined rows. This ensures the total page count matches the actual number of pages with data.
+Replace `$request->query->get()` with `$request->query->all()` for array-type query parameters (`campus_ids`, `modes`) across all affected methods in `FlexSwitchController`. The `all()` method is Symfony's designated way to retrieve array values from the query bag without triggering the non-scalar exception.
 
 ## Capabilities
 
@@ -16,15 +24,19 @@ Fix the pagination count in the `searchQueryPaginated` method to accurately coun
 _(none)_
 
 ### Modified Capabilities
-- `flex-switch-list-course`: Fix pagination total count to use `COUNT(DISTINCT cl.id)` instead of counting inflated joined rows, ensuring accurate page navigation in the All Courses list.
+- `flex-switch-list-course`: Fix `campus_ids` and `modes` array parameter handling so campus/mode filters work correctly.
+- `flex-switch-class-configuration`: Fix `campus_ids` and `modes` array parameter handling (same pattern).
+- `flex-switch-module-detail`: Fix `campus_ids` array parameter handling (same pattern).
 
 ## Impact
 
-- **API (`bidding-api`)**: `ClassesRepository::searchQueryPaginated()` — the pagination count logic needs to produce accurate totals that account for the `LEFT JOIN` row inflation.
-- **Affected endpoint**: `GET /flex-switch/list-course` (used by PM → Switch → All Courses tab)
-- **Affected files**:
-  - `src/Repository/ClassesRepository.php` — `searchQueryPaginated()` method
-  - `src/Repository/PaginatedResult.php` — potentially adjust how count is performed
-- **No migration required**: This is a query logic fix, no schema changes needed.
-- **No breaking API changes**: The response shape stays the same; only the `pagination.total` and `pagination.total_pages` values will become accurate.
-- **No frontend changes needed**: The Ant Design `<Pagination>` component in `bidding-admin` already correctly uses the API's pagination response.
+- **API (`bidding-api`)**: `FlexSwitchController` — three methods need `get()` → `all()` for array params.
+- **Affected endpoints**:
+  - `GET /flex-switch/list-course` (PM → Switch → All Courses tab)
+  - `GET /flex-switch-class-configuration` (PM → Switch → Class Configuration tab)
+  - `GET /flex-switch/{id}/{mode}/{campus}/module-detail` (PM → Switch → Calendar module detail)
+- **Affected file**:
+  - `src/Controller/Api/FlexSwitch/FlexSwitchController.php` — `listCourse()`, `listClassConfiguration()`, `moduleDetail()` methods
+- **No migration required**: This is a controller-level parameter retrieval fix.
+- **No breaking API changes**: The response shape is unchanged; array filters will now work instead of returning 400.
+- **No frontend changes needed**: The frontend already sends array parameters correctly via axios.

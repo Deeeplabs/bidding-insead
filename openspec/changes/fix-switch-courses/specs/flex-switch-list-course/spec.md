@@ -1,57 +1,48 @@
 ## ADDED Requirements
 
-### Requirement: Accurate pagination count for All Courses list
+### Requirement: Array query parameters handled correctly in FlexSwitch endpoints
 
-The `GET /flex-switch/list-course` endpoint must return accurate `pagination.total` and `pagination.total_pages` values that reflect the actual number of distinct class records matching the query filters, regardless of the number of JOIN-multiplied rows produced by the `class_promotions` relationship.
+The `FlexSwitchController` must correctly handle array-type query parameters (`campus_ids`, `modes`) sent using PHP array notation (e.g., `campus_ids[]=2&campus_ids[]=3`) without throwing a 400 Bad Request error. This applies to `listCourse()`, `listClassConfiguration()`, and `moduleDetail()`.
 
-#### Scenario: Pagination total matches distinct class count
-- **GIVEN** the database contains N distinct classes that match the applied filters
-- **AND** some classes have multiple entries in the `class_promotions` table
-- **WHEN** a PM requests `GET /flex-switch/list-course?page=1&limit=10`
-- **THEN** `pagination.total` equals N (the count of distinct classes, not the count of class+promotion pairs)
-- **AND** `pagination.total_pages` equals `ceil(N / 10)`
+#### Scenario: Single campus filter via array notation
+- **GIVEN** a PM is viewing the All Courses list
+- **WHEN** the PM requests `GET /flex-switch/list-course?page=1&limit=10&programmeId=2&campus_ids[]=2`
+- **THEN** the response returns `success: true`
+- **AND** all returned items have `campus` matching campus ID 2
+- **AND** pagination reflects the filtered count
 
-#### Scenario: Last page contains data
-- **GIVEN** the database contains 6580 distinct classes matching the query
-- **AND** the PM sets `limit=100`
-- **WHEN** the PM navigates to page `ceil(6580 / 100)` = page 66
-- **THEN** the response contains between 1 and 100 items
-- **AND** `pagination.current_page` equals 66
+#### Scenario: Multiple campus filters via array notation
+- **GIVEN** a PM is viewing the All Courses list
+- **WHEN** the PM requests `GET /flex-switch/list-course?page=1&limit=10&campus_ids[]=2&campus_ids[]=3`
+- **THEN** the response returns `success: true`
+- **AND** all returned items have `campus` matching either campus ID 2 or 3
 
-#### Scenario: Pages beyond the last page are empty
-- **GIVEN** the database contains 6580 distinct classes matching the query
-- **AND** the PM sets `limit=100`
-- **WHEN** the PM navigates to page 67 or higher
-- **THEN** the response contains an empty `items` array
-- **AND** `pagination.total` still equals 6580
-- **AND** `pagination.total_pages` still equals 66
+#### Scenario: No campus filter provided
+- **GIVEN** a PM is viewing the All Courses list
+- **WHEN** the PM requests `GET /flex-switch/list-course?page=1&limit=10` (no `campus_ids` parameter)
+- **THEN** the response returns `success: true`
+- **AND** items from all campuses are returned (no campus filtering applied)
 
-#### Scenario: Pagination with search filter
-- **WHEN** a PM requests `GET /flex-switch/list-course?page=1&limit=100&search=Finance`
-- **THEN** `pagination.total` equals the count of distinct classes whose name or section contains "Finance"
-- **AND** navigating to the last page (as indicated by `total_pages`) returns data
+#### Scenario: Mode filter via array notation
+- **GIVEN** a PM is viewing the All Courses list
+- **WHEN** the PM requests `GET /flex-switch/list-course?page=1&limit=10&modes[]=online`
+- **THEN** the response returns `success: true`
+- **AND** all returned items have the matching delivery mode
 
-#### Scenario: Pagination with credit/seat/campus filters
-- **WHEN** a PM requests with credit_min, credit_max, seat_min, seat_max, or campus_ids filters
-- **THEN** `pagination.total` equals the count of distinct classes matching ALL applied filters
-- **AND** the last page as per `total_pages` returns data
+#### Scenario: Combined campus and mode filters
+- **WHEN** the PM requests `GET /flex-switch/list-course?page=1&limit=10&campus_ids[]=2&modes[]=online`
+- **THEN** the response returns `success: true`
+- **AND** items are filtered by both campus ID 2 AND delivery mode "online"
 
-#### Scenario: Export (no pagination) is unaffected
-- **WHEN** a PM exports the course list (page/limit omitted)
-- **THEN** all matching classes are returned without pagination
-- **AND** no behavioral change occurs
+#### Scenario: Backward compatibility with comma-separated string format
+- **WHEN** a client requests `GET /flex-switch/list-course?page=1&limit=10&campus_ids=2,3`
+- **THEN** the response returns `success: true`
+- **AND** items are filtered by campus IDs 2 and 3
 
-### Requirement: PaginatedResult supports external count override
+#### Scenario: Class configuration endpoint with array campus filter
+- **WHEN** the PM requests `GET /flex-switch-class-configuration?program_id=1&campus_ids[]=2`
+- **THEN** the response returns successfully with campus-filtered results
 
-The `PaginatedResult` class must support an optional override for the total count, to allow callers to provide a more accurate count when Doctrine's `Paginator->count()` is inaccurate (e.g., due to GROUP BY with JOINs).
-
-#### Scenario: Default behavior preserved
-- **GIVEN** `PaginatedResult` is constructed without a total override
-- **WHEN** `totalRecords` is accessed
-- **THEN** it uses `Paginator->count()` as before (existing behavior unchanged)
-
-#### Scenario: Override count used when provided
-- **GIVEN** `PaginatedResult` is constructed with `totalOverride = 6580`
-- **WHEN** `totalRecords` is accessed
-- **THEN** `totalRecords` equals 6580
-- **AND** `totalPages` equals `ceil(6580 / limit)`
+#### Scenario: Module detail endpoint with array campus filter
+- **WHEN** the PM requests `GET /flex-switch/{id}/{mode}/{campus}/module-detail?campus_ids[]=2`
+- **THEN** the response returns successfully with campus-filtered results
