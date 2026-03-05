@@ -7,6 +7,7 @@ Student pagination in the Create Campaign page (`student-list-table.tsx`) is bro
 - Clearing filters does not reset the page
 - Removed filter parameters (e.g., `campus_ids`, `credits_min`) persist in the API request, returning incorrectly filtered data and wrong pagination totals
 - Sort parameters can revert to stale values when other dependencies trigger the `useEffect`
+- After changing rows per page (pageSize), the pagination controls and actual data count don't match because `StyledPagination` has `pageSize` hardcoded to `PAGINATION_LIMIT` (10)
 
 ## What Changes
 
@@ -14,6 +15,8 @@ Student pagination in the Create Campaign page (`student-list-table.tsx`) is bro
 - Fix the `useEffect` to explicitly clear stale filter keys (`campus_ids`, `student_types`, `credits_min`, `credits_max`, `capital_min`, `capital_max`) instead of only conditionally adding them
 - Add `currentSort` to the `useEffect` dependency array to fix stale sort closure
 - Fix `handleClear` to use functional state update and reset page to 1
+- Fix `StudentsSettingTable` to accept dynamic `pageSize` prop instead of hardcoding `PAGINATION_LIMIT` in the `StyledPagination` component
+- Pass current `queryPayload.limit` from `StudentList` to `StudentsSettingTable` as `pageSize`
 
 ## Capabilities
 
@@ -27,6 +30,7 @@ Student pagination in the Create Campaign page (`student-list-table.tsx`) is bro
 
 **Affected Code:**
 - `bidding-admin/src/components/campaign/student/student-list-table.tsx` — `useEffect` (lines 318-397), `handleClear` (lines 269-275)
+- `bidding-admin/src/components/settings/student-setting-table.tsx` — `StyledPagination` hardcoded `pageSize`
 
 **Testing:**
 - Verify pagination resets to page 1 when applying/removing filters (campus, credit range, student type, exclude, include)
@@ -34,6 +38,7 @@ Student pagination in the Create Campaign page (`student-list-table.tsx`) is bro
 - Verify sorting persists correctly across filter changes
 - Verify page navigation still works normally (clicking page 2, 3, etc.)
 - Verify the Create Campaign page student list works end-to-end
+- Verify changing rows per page updates both the data fetched and the pagination display correctly
 
 **No Breaking Changes:**
 - This is a bug fix that corrects state management behavior

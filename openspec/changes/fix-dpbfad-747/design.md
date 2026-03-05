@@ -16,7 +16,7 @@ The `StudentList` component in `student-list-table.tsx` manages a `queryPayload`
 3. **Search/Filter bar:** `handleSearch(params)` resets page to 1 and merges filter params.
 4. **Clear:** `handleClear()` resets limit and programme_ids.
 
-**Four bugs identified:**
+**Five bugs identified:**
 
 ### Bug 1: Page not reset on filter-dependency changes (PRIMARY)
 
@@ -57,6 +57,22 @@ const handleClear = () => {
 ```
 Uses `queryPayload` from the closure instead of `(prev) => ...` pattern. Also does not reset `page` to 1, does not clear search/filter keys.
 
+### Bug 5: `StyledPagination` pageSize hardcoded to `PAGINATION_LIMIT`
+
+In `student-setting-table.tsx` line 430:
+```tsx
+<StyledPagination
+  pageSize={PAGINATION_LIMIT}  // always 10
+  ...
+/>
+```
+When the user changes rows per page via Ant Design's auto-shown size changer (appears when `total > 50`), `handleChangePage` correctly updates `queryPayload.limit` to the new value (e.g., 20). The API returns the correct number of items. But `StyledPagination` still renders with `pageSize={10}`, causing:
+- Pagination calculates `totalPages = totalRecords / 10` instead of `totalRecords / 20`
+- Page count display is wrong
+- Navigation is broken after page size change
+
+Compare with the working `student-list-all.tsx` which uses `pageSize={pageSize}` (dynamic state variable).
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -64,10 +80,10 @@ Uses `queryPayload` from the closure instead of `(prev) => ...` pattern. Also do
 - Explicitly clear stale filter keys when rebuilding payload in the useEffect
 - Fix stale `currentSort` closure by adding it to dependency array
 - Fix `handleClear` to use functional update and reset page
+- Fix `StudentsSettingTable` to use dynamic `pageSize` instead of hardcoded `PAGINATION_LIMIT`
 
 **Non-Goals:**
 - Refactoring the overall state management approach (single payload object vs separate state)
-- Changing the `StudentsSettingTable` pagination component
 - Modifying the `useListStudents` hook or API
 
 ## Decisions
@@ -119,6 +135,34 @@ const handleClear = () => {
   };
 ```
 
+**Decision: Pass dynamic pageSize to `StudentsSettingTable`**
+
+Add a `pageSize` prop to `StudentsTableProps` in `student-setting-table.tsx`. Use it in `StyledPagination` instead of the hardcoded `PAGINATION_LIMIT`. In `student-list-table.tsx`, pass `queryPayload?.limit || PAGINATION_LIMIT` as the `pageSize` prop.
+
+```tsx
+// student-setting-table.tsx
+interface StudentsTableProps {
+  // ... existing props
+  pageSize?: number;
+}
+
+<StyledPagination
+  pageSize={pageSize || PAGINATION_LIMIT}
+  showSizeChanger
+  current={pagination && pagination.currentPage}
+  total={pagination && pagination.totalRecords}
+  onChange={onChange}
+/>
+```
+
+```tsx
+// student-list-table.tsx
+<StudentsSettingTable
+  pageSize={queryPayload?.limit || PAGINATION_LIMIT}
+  // ... existing props
+/>
+```
+
 ## Risks / Trade-offs
 
 **[Risk] Resetting page to 1 on every useEffect trigger may feel jarring**
@@ -134,7 +178,9 @@ When the user sorts, `currentSort` changes, triggering the useEffect which reset
 
 1. **Code change** — Fix `useEffect` in `student-list-table.tsx` (lines 318-397)
 2. **Code change** — Fix `handleClear` in `student-list-table.tsx` (lines 269-275)
-3. **No database migration required**
-4. **Deployment:** Standard Next.js build and deploy
-5. **Rollback:** Simple code revert if issues arise
-6. **Testing:** Manual verification of pagination across filter/sort/clear scenarios
+3. **Code change** — Add `pageSize` prop to `StudentsSettingTable`, use dynamic value instead of hardcoded `PAGINATION_LIMIT`
+4. **Code change** — Pass `queryPayload?.limit` from `StudentList` to `StudentsSettingTable`
+5. **No database migration required**
+6. **Deployment:** Standard Next.js build and deploy
+7. **Rollback:** Simple code revert if issues arise
+8. **Testing:** Manual verification of pagination across filter/sort/clear/pageSize-change scenarios
