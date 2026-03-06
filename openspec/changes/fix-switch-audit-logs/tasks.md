@@ -1,60 +1,64 @@
-## 1. Add Audit Logging to FlexSwitchApprovalService (PM approve/reject)
+## 1. Switch Audit Log Calls to Synchronous Mode (Root Cause Fix)
 
-- [x] 1.1 **Add `AuditLogService` dependency to `FlexSwitchApprovalService`**
+The existing audit log calls use the default `async: true`, which dispatches `AuditLogMessage` to the Symfony Messenger `async` transport. Messages are queued but may not be consumed if the worker is down or the transport is misconfigured. Fix: pass `async: false` to bypass the message bus and write directly to `audit_log` table.
+
+- [x] 1.1 **Update `processApproval()` audit log call to sync**
   - File: `bidding-api/src/Service/FlexSwitchApprovalService.php`
-  - Add `use App\Domain\AuditLog\AuditLogService;` import
-  - Add `private AuditLogService $auditLogService` to constructor parameters
-  - Follow same pattern as `PM\FlexSwitchService` constructor injection
+  - Find the `$this->auditLogService->log(` call in `processApproval()` (around line 296)
+  - Add `async: false` parameter to the call
+  - Keep all other parameters (action, entityType, entityId, oldData, newData, description) unchanged
 
-- [x] 1.2 **Add audit log calls to `processApproval()` method**
-  - File: `bidding-api/src/Service/FlexSwitchApprovalService.php`
-  - After the `$this->entityManager->flush()` call (line 286), add audit log call:
-    - Action: `'APPROVE FlexSwitchRequest'` or `'REJECT FlexSwitchRequest'` based on `$dto->action`
-    - Entity type: `'FlexSwitchRequest'`
-    - Entity ID: `$request->getId()`
-    - Old data: `{ status: 'pending', student_id, from_class_id, to_class_id, from_course_id, to_course_id }`
-    - New data: `{ status: approved/rejected, approved_by: approver_id, approved_at, remarks }`
-    - Description: Human-readable summary like "FlexSwitch request #42 approved by PM (email) for student (name)"
-  - Follow the pattern from `PM\FlexSwitchService.createConfiguration()` (lines 770-786)
-
-## 2. Add Audit Logging to FlexSwitchService - Student Submit (student side)
-
-- [x] 2.1 **Add `AuditLogService` dependency to `FlexSwitchService` (student)**
+- [x] 1.2 **Update `submitRequest()` audit log call to sync**
   - File: `bidding-api/src/Service/FlexSwitch/FlexSwitchService.php`
-  - Add `use App\Domain\AuditLog\AuditLogService;` import
-  - Add `private readonly AuditLogService $auditLogService` to constructor parameters
+  - Find the `$this->auditLogService->log(` call in `submitRequest()` (around line 817)
+  - Add `async: false` parameter to the call
 
-- [x] 2.2 **Add audit log call to `submitRequest()` method**
+- [x] 1.3 **Update `cancelRequest()` audit log call to sync**
   - File: `bidding-api/src/Service/FlexSwitch/FlexSwitchService.php`
-  - After the flush that persists the new `FlexSwitchRequest`, add audit log call:
-    - Action: `'CREATE FlexSwitchRequest'`
-    - Entity type: `'FlexSwitchRequest'`
-    - Entity ID: `$request->getId()`
-    - Old data: `null`
-    - New data: `{ student_id, from_class_id, to_class_id, from_course_id, to_course_id, reason, status: 'pending' }`
-    - Description: "Student (name) submitted FlexSwitch request to switch from (course) to (course)"
+  - Find the `$this->auditLogService->log(` call in `cancelRequest()` (around line 664)
+  - Add `async: false` parameter to the call
 
-## 3. Add Audit Logging to FlexSwitchService - Student Cancel (student side)
+## 2. Diagnose Silent Errors (if entries still missing after task 1)
 
-- [x] 3.1 **Add audit log call to `cancelRequest()` method**
-  - File: `bidding-api/src/Service/FlexSwitch/FlexSwitchService.php`
-  - After the flush that updates the request status to cancelled, add audit log call:
-    - Action: `'CANCEL FlexSwitchRequest'`
-    - Entity type: `'FlexSwitchRequest'`
-    - Entity ID: `$requestEntity->getId()` (or `$requestId`)
-    - Old data: `{ status: 'pending' }`
-    - New data: `{ status: 'cancelled', cancelled_by: student_id, cancelled_at, cancellation_reason }`
-    - Description: "Student (name) cancelled FlexSwitch request #(id)"
+- [ ] 2.1 **Check application logs for audit log errors**
+  - Search Symfony log files (`var/log/dev.log` or `var/log/prod.log`) for:
+    - `"Failed to save audit log"` — indicates `AuditLogService::log()` caught an exception
+    - `"Failed to save audit log from message"` — indicates `AuditLogMessageHandler` caught an exception
+  - If errors found, the stack trace will reveal the root cause (serialization, DB constraint, etc.)
 
-## 4. Manual Verification
+- [ ] 2.2 **Query `audit_log` table directly**
+  - Run: `SELECT id, action, entity_type, entity_id, description, created_at FROM audit_log WHERE entity_type = 'FlexSwitchRequest' ORDER BY created_at DESC LIMIT 10;`
+  - If rows exist → the issue is frontend display, not persistence
+  - If no rows → the `log()` call is failing silently or not being reached
 
-- [x] 4.1 **Verify audit logs appear for PM approval/rejection**
-  - Login as PM, go to Flex Switch, approve or reject a request
-  - Go to Monitoring & Analytics > Audit Logs
-  - Confirm audit log entries appear with action `APPROVE FlexSwitchRequest` or `REJECT FlexSwitchRequest`
-  - Verify old_data and new_data contain correct status transitions
+- [ ] 2.3 **Verify Symfony Messenger transport status (informational)**
+  - Check `MESSENGER_TRANSPORT_DSN` env var value
+  - If `doctrine://default`: check `messenger_messages` table for queued `AuditLogMessage` entries
+  - If `sync://`: messages are processed synchronously (task 1 fix would be redundant but harmless)
 
-- [x] 4.2 **Verify audit logs appear for student submit/cancel**
-  - Login as student, submit a new flex switch request
-  - Cancel a pending flex switch request
-  - Go to Audit Logs (as admin) and confirm entries for `CREATE FlexSwitchRequest` and `CANCEL FlexSwitchRequest`
+## 3. Verification — Confirm Audit Logs Appear on UI
+
+- [ ] 3.1 **Test student submit → audit log**
+  - Login as student, submit a flex switch request via `POST /v2/api/student/flex-switch/request`
+  - Query DB: `SELECT * FROM audit_log WHERE action = 'CREATE FlexSwitchRequest' ORDER BY created_at DESC LIMIT 1;`
+  - Confirm row exists with correct `entity_type`, `entity_id`, `old_data`, `new_data`, `description`
+  - Go to Monitoring & Analytics > Audit Logs page and confirm the entry is visible
+
+- [ ] 3.2 **Test PM approve/reject → audit log**
+  - Login as PM, approve or reject a pending flex switch request via `POST /v2/api/dashboard/flex-switch/approval-requests/{id}/process`
+  - Query DB: `SELECT * FROM audit_log WHERE action LIKE '%FlexSwitchRequest' AND action != 'CREATE FlexSwitchRequest' ORDER BY created_at DESC LIMIT 1;`
+  - Confirm row exists with correct status transition in `old_data` / `new_data`
+  - Go to Audit Logs page and confirm the entry is visible
+
+- [ ] 3.3 **Test student cancel → audit log**
+  - Login as student, cancel a pending flex switch request
+  - Query DB: `SELECT * FROM audit_log WHERE action = 'CANCEL FlexSwitchRequest' ORDER BY created_at DESC LIMIT 1;`
+  - Confirm row exists
+  - Go to Audit Logs page and confirm the entry is visible
+
+## 4. Endpoint Clarification (no code change needed)
+
+- [x] 4.1 **Document: GET `/v2/api/dashboard/flex-switch/approval-requests` does NOT create audit logs**
+  - This is a read-only list endpoint (`FlexSwitchApprovalController::getApprovalRequests()`)
+  - Audit logs are only created for mutations: submit (POST), approve/reject (POST), cancel (POST)
+  - The approval action endpoint is `POST /v2/api/dashboard/flex-switch/approval-requests/{id}/process`

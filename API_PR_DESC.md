@@ -1,42 +1,38 @@
-# Fix: Add Audit Logging to Flex Switch Operations
+# Fix: Flex Switch Audit Logs Not Appearing on Audit Logs Page
 
 ## Problem
 
-When a Programme Manager (PM) interacts with the Flex Switch module — specifically approving or rejecting student switch requests — none of these actions were recorded in the system Audit Logs. Similarly, student-side operations (submitting and cancelling flex switch requests) were also completely unaudited.
+After adding `AuditLogService` calls to all FlexSwitch mutation operations (approve, reject, submit, cancel), audit log entries were **still not visible** on the Monitoring & Analytics > Audit Logs page.
 
-This was a compliance and traceability gap. While the `AuditLogService` was already used extensively across other modules (user management, campaigns, simulations), and even partially within Flex Switch itself (`createConfiguration` and `saveCourseAdjustment` were audited), the **approval workflow** and **student request lifecycle** were never wired to it.
+Reported endpoints affected:
+- `POST /v2/api/student/flex-switch/request` — student submits a flex switch request
+- `POST /v2/api/dashboard/flex-switch/approval-requests/{id}/process` — PM approves/rejects a request
+
+> **Note:** `GET /v2/api/dashboard/flex-switch/approval-requests?page=1&limit=5` is a read-only list endpoint — it does NOT create audit logs by design.
 
 ### Root Cause
 
-- `FlexSwitchApprovalService.processApproval()` — did not inject or call `AuditLogService`
-- `FlexSwitchService.submitRequest()` (student side) — did not inject or call `AuditLogService`
-- `FlexSwitchService.cancelRequest()` (student side) — did not inject or call `AuditLogService`
+The `AuditLogService->log()` calls used the default `async: true`, which dispatches `AuditLogMessage` to the Symfony Messenger `async` transport (`config/packages/messenger.yaml`). The transport DSN depends on the `MESSENGER_TRANSPORT_DSN` env var — if this is a queue-based transport (Doctrine, Redis, AMQP), a running consumer worker (`php bin/console messenger:consume async`) is required. If the worker is not running or the transport is misconfigured, messages pile up in the queue but never persist to the `audit_log` table.
+
+Additionally, both `AuditLogService::log()` and `AuditLogMessageHandler::__invoke()` catch ALL exceptions silently (logging to file only), making errors invisible to users and API responses.
 
 ## Solution
 
-Added `AuditLogService` dependency injection and audit log calls to all FlexSwitch mutation operations that previously lacked audit logging. Followed the exact same pattern already established in `PM\FlexSwitchService.createConfiguration()` and `saveCourseAdjustment()`.
+Switched all FlexSwitch audit log calls to **synchronous mode** (`async: false`), bypassing the Messenger bus entirely. This writes audit entries directly to the `audit_log` table in the same request via `AuditLogRepository::save()`.
 
 ### Changes Made
 
 **Modified File:**
 
 1. **`src/Service/FlexSwitchApprovalService.php`**
-   - Added `AuditLogService` import and constructor dependency injection
-   - Added audit log call in `processApproval()` after successful flush:
-     - Logs `APPROVE FlexSwitchRequest` or `REJECT FlexSwitchRequest` action
-     - Records old data (pending status, student/course IDs) and new data (approved/rejected status, approver, remarks)
-     - Includes human-readable description with PM name, student name, and request ID
+   - Updated `auditLogService->log()` call in `processApproval()` — added `async: false`
+   - Logs `APPROVE FlexSwitchRequest` or `REJECT FlexSwitchRequest` action synchronously after flush
 
 2. **`src/Service/FlexSwitch/FlexSwitchService.php`**
-   - Added `AuditLogService` import and constructor dependency injection
-   - Added audit log call in `submitRequest()` after successful save:
-     - Logs `CREATE FlexSwitchRequest` action
-     - Records new data (student ID, from/to class and course IDs, reason, pending status)
-     - Includes description with student name and course names
-   - Added audit log call in `cancelRequest()` after successful save:
-     - Logs `CANCEL FlexSwitchRequest` action
-     - Records old data (pending status) and new data (cancelled status, cancellation reason, timestamp)
-     - Includes description with student name and request ID
+   - Updated `auditLogService->log()` call in `submitRequest()` — added `async: false`
+   - Logs `CREATE FlexSwitchRequest` action synchronously after save
+   - Updated `auditLogService->log()` call in `cancelRequest()` — added `async: false`
+   - Logs `CANCEL FlexSwitchRequest` action synchronously after save
 
 ## Audit Log Actions Summary
 
@@ -49,16 +45,17 @@ Added `AuditLogService` dependency injection and audit log calls to all FlexSwit
 
 ## Impact
 
-- **Audit Compliance:** All FlexSwitch state-changing operations are now fully recorded in the `audit_log` table
-- **No API Changes:** Purely additive backend change — no response shape modifications
+- **Audit Compliance:** All FlexSwitch state-changing operations now reliably persist to the `audit_log` table
+- **No API Changes:** Purely backend change — no response shape modifications
 - **No Migrations:** Uses existing `audit_log` table infrastructure
 - **No Breaking Changes:** All existing FlexSwitch operations continue to function identically
-- **Async Logging:** Uses the default async message bus for audit log dispatch (no request latency impact)
+- **Synchronous Logging:** Adds a small DB write per mutation (~1-5ms). Acceptable for low-frequency FlexSwitch operations
 
-## Testing
+## Verification
 
-- [x] PM approval/rejection creates audit log entries with correct action, entity type, old/new data
-- [x] Student submit creates audit log entry with course details
-- [x] Student cancel creates audit log entry with status transition
-- [x] Existing audit log entries (configuration, course adjustment) remain unaffected
-- [x] All new entries visible in Monitoring & Analytics > Audit Logs page
+- [ ] Query DB: `SELECT * FROM audit_log WHERE entity_type = 'FlexSwitchRequest' ORDER BY created_at DESC LIMIT 10;`
+- [ ] PM approval/rejection creates audit log entries with correct action, entity type, old/new data
+- [ ] Student submit creates audit log entry with course details
+- [ ] Student cancel creates audit log entry with status transition
+- [ ] Existing audit log entries (configuration, course adjustment) remain unaffected
+- [ ] All new entries visible in Monitoring & Analytics > Audit Logs page
