@@ -4,7 +4,7 @@
 
 When a Student navigates to **Switch → clicks on a module → Course list popup** (Figma Screen 2-3), the **Seat Capacity** filter (`seat_min` / `seat_max`) does not work correctly. The filter produces inconsistent results — classes that should be excluded by the filter still appear, and vice versa.
 
-**Root cause:** The `getAvailableCourses()` method in `FlexSwitchService` (student-side) filters on **individual** `ClassPromotions.promotionSeats` rows using `WHERE cp.promotionSeats >= :seatMin`, but the displayed `seat_available` value in the response is the **SUM** of all `ClassPromotions.promotionSeats` for that class.
+**Root cause:** The `getAvailableCourses()` method in `FlexSwitchService` (student-side) filters on **individual** `ClassPromotions.promotionSeats` rows using `WHERE cp.promotionSeats >= :seatMin`, but the displayed `seat_available` value in the response is the **SUM** of all `ClassPromotions.promotionSeats` for that class (computed in `formatCourses()`).
 
 **Example:** A class with 3 ClassPromotions rows of 30 seats each (total = 90) would:
 - ❌ Pass `seat_max=50` filter (because each individual row 30 ≤ 50) — but shows `seat_available = 90`
@@ -12,11 +12,11 @@ When a Student navigates to **Switch → clicks on a module → Course list popu
 
 **Secondary issue:** The pagination count query uses `COUNT(cl.id)` without `DISTINCT`, inflating total counts when a class has multiple `ClassPromotions` rows from the JOIN.
 
-> The PM-side `listClassConfiguration()` already handles this correctly using `SUM(cp.promotionSeats)` with `GROUP BY` and `HAVING`.
+> The PM-side `listCourse()` already handles this correctly using PHP-level seat filtering after entity hydration.
 
 ## Solution
 
-Single file fix in the API backend — no frontend changes, no migration required:
+Single file fix in the API backend — no frontend changes, no migration required.
 
 ### Changes Made
 
@@ -26,16 +26,18 @@ Single file fix in the API backend — no frontend changes, no migration require
    - **Method**: `getAvailableCourses(Student $student, array $filters)`
 
    **Seat filter fix:**
-   - Removed incorrect `WHERE cp.promotionSeats >= :seatMin` / `<= :seatMax` clauses
-   - Added `GROUP BY cl.id` to aggregate ClassPromotions per class
-   - Added `HAVING SUM(cp.promotionSeats) >= :seatMin` / `<= :seatMax` to filter on total seats
-   - This ensures the filter matches the displayed `seat_available` value
+   - Removed incorrect `WHERE cp.promotionSeats >= :seatMin` / `<= :seatMax` DQL clauses
+   - Seat filtering is now done **in PHP** after fetching entities — computes the total SUM of all `ClassPromotions.promotionSeats` per class, then filters against `seat_min`/`seat_max`
+   - This ensures the filter matches the exact same `seat_available` value displayed in the response
+   - Follows the PM's `listCourse()` pattern (PHP-level filtering) — `GROUP BY + HAVING SUM()` cannot be used here because the query uses Doctrine entity hydration
+
+   **Two execution paths:**
+   - **Without seat filters**: Standard DB-level pagination with `COUNT(DISTINCT cl.id)` — efficient, no behavior change
+   - **With seat filters**: Fetches all matching classes → filters by seat sum in PHP → paginates with `array_slice()` — correct results
 
    **Pagination count fix:**
-   - Replaced `clone $qb` + `COUNT(cl.id)` with a dedicated count query using `COUNT(DISTINCT cl2.id)`
-   - All WHERE conditions are replicated on the count query
-   - Seat filter for count uses subquery `(SELECT SUM(cp.promotionSeats) ... WHERE cp.class = cl.id) >= :seatMin` pattern
-   - Follows the same approach as PM's `listClassConfiguration()` count query
+   - Changed `COUNT(cl.id)` to `COUNT(DISTINCT cl.id)` to avoid inflated totals from JOINed ClassPromotions rows
+   - When seat filters are active, total count comes from `count($filteredClasses)` after PHP filtering
 
 ## Impact
 

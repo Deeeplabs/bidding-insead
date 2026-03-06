@@ -1,38 +1,46 @@
 ## Context
 
-The student-side `GET /student/flex-switch/courses` endpoint (`FlexSwitchService::getAvailableCourses()`) has a seat capacity filtering bug. The filter compares `seat_min`/`seat_max` against individual `ClassPromotions.promotionSeats` rows instead of the total (SUM) across all ClassPromotions for a class. The displayed `seat_available` in the response correctly sums all ClassPromotions, creating a mismatch between what is filtered and what is shown.
+The student-side `GET /student/flex-switch/courses` endpoint (`FlexSwitchService::getAvailableCourses()`) has a seat capacity filtering bug. The filter compares `seat_min`/`seat_max` against individual `ClassPromotions.promotionSeats` rows via `WHERE` clauses, but the displayed `seat_available` in the response is the SUM of all ClassPromotions for that class (computed in `formatCourses()` via a PHP loop). This creates a mismatch between what is filtered and what is shown.
 
-The PM-side `FlexSwitch\PM\FlexSwitchService::listClassConfiguration()` already implements this correctly using `SUM(cp.promotionSeats)` with `GROUP BY` and `HAVING` clauses.
+**Critical technical constraint:** The query uses Doctrine ORM **entity hydration** — `->select('cl', 'course', 'campus', 'cp', 'promotion', 'courseType', 'pp')` — which returns full entity objects. Doctrine cannot use `GROUP BY` + `HAVING SUM()` with entity-level selects. The `GROUP BY` + `HAVING` pattern only works with scalar/array selects (e.g., `->select('cl.id', 'SUM(cp.promotionSeats) as totalSeats')`).
+
+The PM-side has two approaches:
+1. `listClassConfiguration()` — uses scalar selects with `GROUP BY` + `HAVING SUM()` (lines 396-410, 443-450)
+2. `listCourse()` — uses entity hydration with `GROUP BY cl.id`, then filters seats in PHP (lines 671, 700-717)
+
+Since the student-side `getAvailableCourses()` uses entity hydration and `formatCourses()` depends on entity methods, the correct approach is to follow the PM's `listCourse()` pattern: **PHP-level seat filtering**.
 
 ## Goals / Non-Goals
 
 **Goals:**
-- Fix seat capacity filter to use SUM of all ClassPromotions seats for a class, matching the displayed `seat_available`
+- Fix seat capacity filter to use the total SUM of all ClassPromotions seats for a class, matching the displayed `seat_available`
 - Fix pagination count to use `COUNT(DISTINCT cl.id)` to avoid inflated counts from JOINs
-- Align student-side filtering approach with the proven PM-side pattern
+- Handle seat-filtered pagination correctly (fetch all, filter in PHP, slice for page)
+- Align student-side filtering approach with the proven PM-side `listCourse()` pattern
 
 **Non-Goals:**
 - No changes to the API response shape
-- No changes to other filters (credit, campus, delivery_mode)
+- No refactoring the query to use scalar selects (would require rewriting `formatCourses()`)
+- No changes to other filters (credit, campus, delivery_mode, search, promotion_period)
 - No changes to PM-side endpoints (already correct)
 - No database schema changes
 - No frontend changes
 
 ## Decisions
 
-1. **Refactor query to use GROUP BY + HAVING pattern**: Instead of filtering on `cp.promotionSeats` directly (which operates on individual rows), add `GROUP BY cl.id` and use `HAVING SUM(cp.promotionSeats) >= :seatMin` / `<= :seatMax`. This matches the PM's `listClassConfiguration()` approach (lines 381, 425-432 in `PM\FlexSwitchService.php`).
+1. **Remove seat filters from DQL, apply in PHP**: Remove the `WHERE cp.promotionSeats >= :seatMin` and `WHERE cp.promotionSeats <= :seatMax` clauses from the query builder. Instead, after fetching entities, compute the total seat sum per class (same logic as `formatCourses()`) and filter before pagination. This exactly matches PM's `listCourse()` pattern (lines 700-717).
 
-2. **Fix pagination count**: Change `COUNT(cl.id)` to `COUNT(DISTINCT cl.id)` in the count query clone to avoid inflated totals from JOINed ClassPromotions. For seat filters, use a subquery approach (same as PM's count query at lines 516-531) to correctly filter before counting.
+2. **Two pagination paths**: 
+   - **Without seat filters**: Use the existing `COUNT(DISTINCT cl.id)` approach for efficient DB-level pagination (clone query, count, then paginate with `setFirstResult/setMaxResults`).
+   - **With seat filters**: Fetch all matching classes (no pagination at DB level), compute seat sums, filter in PHP, then slice the result array for the requested page. This is necessary because the seat filter cannot be expressed in DQL with entity hydration.
 
-3. **Keep the hard filter `cp.promotionSeats > 0` as-is**: This WHERE clause correctly excludes individual zero-seat ClassPromotions from the JOIN, which is the right behavior (we only want classes that have at least one non-zero seat row).
+3. **Keep the hard filter `cp.promotionSeats > 0` as-is**: This WHERE clause correctly excludes classes where ALL ClassPromotions have zero seats. It's a pre-filter that reduces the result set before PHP-level processing.
 
-4. **Approach pattern**: The fix uses the same two-part approach as the PM service:
-   - Main query: `GROUP BY cl.id` + `HAVING SUM(...)` for filtering
-   - Count query: Subquery with `SUM` for accurate counting with seat filters
+4. **Fix count query to use `COUNT(DISTINCT cl.id)`**: The current `COUNT(cl.id)` inflates the count when a class has multiple ClassPromotions rows. Change to `COUNT(DISTINCT cl.id)` for accurate pagination in the non-seat-filter path.
 
 ## Risks / Trade-offs
 
-- **Low risk**: This is a straightforward fix aligning with an already-proven pattern in the PM service
-- **Performance**: Adding `GROUP BY` may slightly increase query complexity, but the PM service already uses this pattern at scale without issues
-- **Backward compatibility**: No risk — the API response shape is unchanged, and the filter simply starts working correctly
-- **No migration needed**: Pure business logic fix in a single service method
+- **Performance concern for seat-filtered queries**: When seat filters are applied, ALL matching classes must be fetched from DB before PHP filtering. This could be slower for very large datasets. However, the PM's `listCourse()` already uses this exact pattern at production scale without issues. The dataset is pre-filtered by student's promotion, course type, and `cp.promotionSeats > 0`, which limits the result set significantly.
+- **Low risk overall**: This is a straightforward fix aligning with an already-proven PM-side pattern.
+- **Backward compatibility**: No risk — the API response shape is unchanged, and the filter simply starts working correctly.
+- **No migration needed**: Pure business logic fix in a single service method.
