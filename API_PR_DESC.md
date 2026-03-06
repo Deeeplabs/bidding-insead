@@ -1,60 +1,64 @@
-# Fix Switch Courses — Array Query Parameter Handling
+# Fix: Add Audit Logging to Flex Switch Operations
 
 ## Problem
 
-In the PM admin panel under **Switch → All Courses**, filtering by campus returns a 400 Bad Request error:
+When a Programme Manager (PM) interacts with the Flex Switch module — specifically approving or rejecting student switch requests — none of these actions were recorded in the system Audit Logs. Similarly, student-side operations (submitting and cancelling flex switch requests) were also completely unaudited.
 
-```json
-{
-  "success": false,
-  "message": "Input value \"campus_ids\" contains a non-scalar value.",
-  "error": { "code": "BAD_REQUEST" }
-}
-```
+This was a compliance and traceability gap. While the `AuditLogService` was already used extensively across other modules (user management, campaigns, simulations), and even partially within Flex Switch itself (`createConfiguration` and `saveCourseAdjustment` were audited), the **approval workflow** and **student request lifecycle** were never wired to it.
 
-**Root cause:** Symfony 6.4's `InputBag::get()` throws `BadRequestHttpException` when the query parameter value is non-scalar (i.e., an array). The frontend sends `campus_ids` as `number[]` via axios, which serializes to `campus_ids[]=2` in the URL. PHP parses this as an array, and `$request->query->get('campus_ids')` throws before the controller logic runs. The same issue affects the `modes` parameter.
+### Root Cause
+
+- `FlexSwitchApprovalService.processApproval()` — did not inject or call `AuditLogService`
+- `FlexSwitchService.submitRequest()` (student side) — did not inject or call `AuditLogService`
+- `FlexSwitchService.cancelRequest()` (student side) — did not inject or call `AuditLogService`
 
 ## Solution
 
-Replaced `$request->query->get()` with `$request->query->all()` for array-type query parameters (`campus_ids`, `modes`) across all affected controller methods. `InputBag::all()` is Symfony's designated method for retrieving array values without triggering the non-scalar exception.
+Added `AuditLogService` dependency injection and audit log calls to all FlexSwitch mutation operations that previously lacked audit logging. Followed the exact same pattern already established in `PM\FlexSwitchService.createConfiguration()` and `saveCourseAdjustment()`.
 
 ### Changes Made
 
 **Modified File:**
 
-**`src/Controller/Api/FlexSwitch/FlexSwitchController.php`**
+1. **`src/Service/FlexSwitchApprovalService.php`**
+   - Added `AuditLogService` import and constructor dependency injection
+   - Added audit log call in `processApproval()` after successful flush:
+     - Logs `APPROVE FlexSwitchRequest` or `REJECT FlexSwitchRequest` action
+     - Records old data (pending status, student/course IDs) and new data (approved/rejected status, approver, remarks)
+     - Includes human-readable description with PM name, student name, and request ID
 
-1. **`listCourse()`** — `campus_ids` and `modes` parameters
-   - Changed `$request->query->get('campus_ids')` → `$request->query->all('campus_ids')`
-   - Changed `$request->query->get('modes')` → `$request->query->all('modes')`
-   - Simplified downstream handling since `all()` returns an array directly
-   - Added backward compat fallback for comma-separated string format
+2. **`src/Service/FlexSwitch/FlexSwitchService.php`**
+   - Added `AuditLogService` import and constructor dependency injection
+   - Added audit log call in `submitRequest()` after successful save:
+     - Logs `CREATE FlexSwitchRequest` action
+     - Records new data (student ID, from/to class and course IDs, reason, pending status)
+     - Includes description with student name and course names
+   - Added audit log call in `cancelRequest()` after successful save:
+     - Logs `CANCEL FlexSwitchRequest` action
+     - Records old data (pending status) and new data (cancelled status, cancellation reason, timestamp)
+     - Includes description with student name and request ID
 
-2. **`listClassConfiguration()`** — `campus_ids` and `modes` parameters
-   - Changed `$request->query->get('campus_ids')` → `$request->query->all('campus_ids') ?: null`
-   - Changed `$request->query->get('modes')` → `$request->query->all('modes') ?: null`
+## Audit Log Actions Summary
 
-3. **`moduleDetail()`** — `campus_ids` parameter
-   - Changed `$request->query->get('campus_ids')` → `$request->query->all('campus_ids') ?: null`
+| Operation                 | Action                         | Entity Type          | Data Captured                                                  |
+|---------------------------|--------------------------------|----------------------|----------------------------------------------------------------|
+| PM approves request       | `APPROVE FlexSwitchRequest`    | `FlexSwitchRequest`  | Status transition, approver, student/course info, remarks      |
+| PM rejects request        | `REJECT FlexSwitchRequest`     | `FlexSwitchRequest`  | Status transition, approver, student/course info, remarks      |
+| Student submits request   | `CREATE FlexSwitchRequest`     | `FlexSwitchRequest`  | From/to class/course IDs, reason, student info                 |
+| Student cancels request   | `CANCEL FlexSwitchRequest`     | `FlexSwitchRequest`  | Status transition, cancellation reason, student info           |
 
 ## Impact
 
-- **Affected endpoints:**
-  - `GET /flex-switch/list-course` (PM → Switch → All Courses)
-  - `GET /flex-switch-class-configuration` (PM → Switch → Class Configuration)
-  - `GET /flex-switch/{id}/{mode}/{campus}/module-detail` (PM → Switch → Calendar module detail)
-- **No breaking changes:** API response shape is unchanged; array filters now work instead of returning 400
-- **No migration required:** Controller-level parameter retrieval fix only
-- **Backward compatible:** Comma-separated string format still supported as fallback
-- **No frontend changes needed:** The frontend already sends array parameters correctly
+- **Audit Compliance:** All FlexSwitch state-changing operations are now fully recorded in the `audit_log` table
+- **No API Changes:** Purely additive backend change — no response shape modifications
+- **No Migrations:** Uses existing `audit_log` table infrastructure
+- **No Breaking Changes:** All existing FlexSwitch operations continue to function identically
+- **Async Logging:** Uses the default async message bus for audit log dispatch (no request latency impact)
 
 ## Testing
 
-- [ ] Verified `GET /flex-switch/list-course?page=1&limit=10&programmeId=2&campus_ids[]=2` returns success (no 400 error)
-- [ ] Verified multiple campus filter: `campus_ids[]=2&campus_ids[]=3`
-- [ ] Verified mode filter: `modes[]=online`
-- [ ] Verified combined campus + mode filters work together
-- [ ] Verified no-filter requests still work correctly
-- [ ] Verified class configuration endpoint with `campus_ids[]=2` works
-- [ ] Verified module detail endpoint with `campus_ids[]=2` works
-- [ ] Verified campus filter works correctly in admin UI (Switch → All Courses → filter bar)
+- [x] PM approval/rejection creates audit log entries with correct action, entity type, old/new data
+- [x] Student submit creates audit log entry with course details
+- [x] Student cancel creates audit log entry with status transition
+- [x] Existing audit log entries (configuration, course adjustment) remain unaffected
+- [x] All new entries visible in Monitoring & Analytics > Audit Logs page
