@@ -56,33 +56,85 @@ When a student cancels a pending flex switch request via `POST /student/flex-swi
   - `oldData`: `{ "status": "pending", "student_id": "...", "from_class_id": ..., "to_class_id": ... }`
   - `newData`: `{ "status": "cancelled", "cancelled_by": "0652935", "cancelled_at": <timestamp>, "cancellation_reason": "No longer needed" }`
 
+### Requirement: Audit log for PM course adjustment
+
+When a PM saves course adjustment changes via `POST /flex-switch/course-adjustment/{course_id}/{class_id}`, audit log entries must be **synchronously persisted** for each changed entity.
+
+#### Scenario: PM updates course details via course adjustment
+- **GIVEN** a course "Finance 101" (ID: 007304) with class ID 19142
+- **WHEN** PM user updates the course name, credit, or information link
+- **THEN** an audit log entry is **immediately written** (synchronous, `async: false`) with:
+  - `action`: `UPDATE Course`
+  - `entityType`: `Course`
+  - `entityId`: course ID
+  - `oldData`/`newData`: course fields before/after change
+
+#### Scenario: PM updates class details via course adjustment
+- **GIVEN** the same class
+- **WHEN** PM user updates deadline, campus, delivery mode, instructor, assistant email, or conflicts
+- **THEN** an audit log entry is **immediately written** with:
+  - `action`: `UPDATE Class`
+  - `entityType`: `Class`
+
+#### Scenario: PM updates seat capacity via course adjustment
+- **WHEN** PM user changes the seat capacity
+- **THEN** an audit log entry is **immediately written** with:
+  - `action`: `UPDATE ClassPromotion`
+  - `entityType`: `ClassPromotion`
+
+#### Scenario: PM creates or updates flex course adjustment
+- **WHEN** PM user changes switch seats or fallbacks
+- **THEN** an audit log entry is **immediately written** with:
+  - `action`: `CREATE FlexCourseAdjustment` or `UPDATE FlexCourseAdjustment`
+  - `entityType`: `FlexCourseAdjustment`
+
+### Requirement: Audit log for PM FlexSwitch configuration
+
+When a PM creates or updates a FlexSwitch configuration, audit log entries must be **synchronously persisted**.
+
+#### Scenario: PM creates a new FlexSwitch configuration
+- **WHEN** PM creates a configuration for a promotion
+- **THEN** an audit log entry is **immediately written** with:
+  - `action`: `CREATE FlexSwitchConfiguration`
+  - `entityType`: `FlexSwitchConfiguration`
+
+#### Scenario: PM updates an existing FlexSwitch configuration
+- **WHEN** PM updates a configuration for a promotion
+- **THEN** an audit log entry is **immediately written** with:
+  - `action`: `UPDATE FlexSwitchConfiguration`
+  - `entityType`: `FlexSwitchConfiguration`
+
 ### Requirement: Audit log entries appear in existing Audit Logs view
 
 No frontend changes needed — audit log entries for FlexSwitch operations appear in the existing Monitoring & Analytics > Audit Logs page automatically because they use the same `audit_log` table and `AuditLogService`.
 
 #### Scenario: Viewing FlexSwitch audit logs in Audit Logs page
-- **GIVEN** a PM has approved several flex switch requests
+- **GIVEN** a PM has approved requests and saved course adjustments
 - **WHEN** another admin views the Audit Logs page
-- **THEN** the FlexSwitch approval/rejection entries appear in the log list with correct action, entity type, description, and timestamp
+- **THEN** all FlexSwitch entries appear in the log list with correct action, entity type, description, and timestamp
 
 #### Scenario: Searching for FlexSwitch audit logs
 - **GIVEN** FlexSwitch audit log entries exist in the `audit_log` table
 - **WHEN** an admin searches for "FlexSwitch" in the Audit Logs search box
-- **THEN** entries with actions like `APPROVE FlexSwitchRequest`, `CREATE FlexSwitchRequest`, etc. are returned (search matches on `action` field)
+- **THEN** entries with actions like `APPROVE FlexSwitchRequest`, `CREATE FlexSwitchRequest`, `UPDATE Course`, `UPDATE Class`, etc. are returned
 
-### Requirement: GET list endpoint does NOT create audit logs
+### Requirement: GET endpoints do NOT create audit logs
 
-The `GET /dashboard/flex-switch/approval-requests` endpoint is a read-only list endpoint. It does NOT create audit log entries. Only mutation endpoints (POST) create audit logs.
+Read-only endpoints do NOT create audit log entries. Only mutation endpoints (POST) create audit logs.
 
 #### Scenario: Viewing the approval requests list
 - **WHEN** a PM calls `GET /v2/api/dashboard/flex-switch/approval-requests?page=1&limit=5`
-- **THEN** no audit log entry is created (this is a read operation)
+- **THEN** no audit log entry is created
+
+#### Scenario: Viewing course adjustment details
+- **WHEN** a PM calls `GET /v2/api/flex-switch/course-adjustment/{course_id}/{class_id}`
+- **THEN** no audit log entry is created
 
 ### Requirement: No impact on existing behavior
 
 #### Scenario: Existing FlexSwitch operations continue to work normally
 - **WHEN** the audit logging uses synchronous mode (`async: false`)
-- **THEN** all existing FlexSwitch operations (submit, approve, reject, cancel) continue to function identically
+- **THEN** all existing FlexSwitch operations (submit, approve, reject, cancel, course adjustment, configuration) continue to function identically
 - **AND** API response shapes remain unchanged
 - **AND** no new database migrations are required
-- **AND** the only additional latency is a single synchronous DB write per mutation (~1-5ms)
+- **AND** the only additional latency is a single synchronous DB write per audit log entry (~1-5ms)

@@ -2,27 +2,29 @@
 
 The FlexSwitch module allows students to request course switches, and PMs to approve/reject those requests. The system has a comprehensive `AuditLogService` used across many modules (user management, campaigns, simulations, course adjustments). However, audit logging coverage in FlexSwitch is incomplete:
 
-**Currently audited** (in `PM\FlexSwitchService`):
-- `createConfiguration()` — logs CREATE/UPDATE FlexSwitchConfiguration ✅
-- `saveCourseAdjustment()` — logs Course, Class, ClassPromotion, and FlexCourseAdjustment changes ✅
+**Audit log calls exist but use async** (all affected by the same root cause):
+- `PM\FlexSwitchService.createConfiguration()` — logs CREATE/UPDATE FlexSwitchConfiguration (2 calls, async)
+- `PM\FlexSwitchService.saveCourseAdjustment()` — logs Course, Class, ClassPromotion, FlexCourseAdjustment changes (5 calls, async)
+- `FlexSwitchApprovalService.processApproval()` — logs APPROVE/REJECT FlexSwitchRequest (1 call, async)
+- `FlexSwitchService.submitRequest()` — logs CREATE FlexSwitchRequest (1 call, async)
+- `FlexSwitchService.cancelRequest()` — logs CANCEL FlexSwitchRequest (1 call, async)
 
-**NOT audited** (the gap this change fixes):
-- `FlexSwitchApprovalService.processApproval()` — approve/reject requests ❌
-- `FlexSwitchService.submitRequest()` — student submits a switch request ❌
-- `FlexSwitchService.cancelRequest()` — student cancels a pending request ❌
+**Total: 10 audit log calls across 3 services — all using default `async: true`.**
 
-**Previous attempt status**: Audit log calls were added to all three methods above, and `AuditLogService` was injected into both services. However, entries are NOT appearing in the Audit Logs page. Investigation revealed the root cause is the **async message delivery mechanism**.
+**Previous attempt status**: Audit log calls were added to `FlexSwitchApprovalService` and student-side `FlexSwitchService`. The `PM\FlexSwitchService` already had audit log calls. However, entries are NOT appearing in the Audit Logs page for ANY of these. Investigation revealed the root cause is the **async message delivery mechanism**.
 
 **Key endpoint clarification**:
 - `POST /v2/api/student/flex-switch/request` → calls `submitRequest()` → SHOULD create audit log
 - `POST /v2/api/dashboard/flex-switch/approval-requests/{id}/process` → calls `processApproval()` → SHOULD create audit log
-- `GET /v2/api/dashboard/flex-switch/approval-requests?page=1&limit=5` → READ-only list endpoint → does NOT create audit logs (by design)
+- `POST /v2/api/flex-switch/course-adjustment/{course_id}/{class_id}` → calls `saveCourseAdjustment()` → SHOULD create audit logs (up to 5 per call)
+- `GET /v2/api/dashboard/flex-switch/approval-requests?page=1&limit=5` → READ-only → no audit log
+- `GET /v2/api/flex-switch/course-adjustment/{course_id}/{class_id}` → READ-only → no audit log
 
 ## Goals / Non-Goals
 
 **Goals:**
-- Ensure audit log entries for FlexSwitch state-changing operations are **reliably persisted** to the `audit_log` table
-- Fix the async delivery issue by switching to synchronous logging for FlexSwitch operations
+- Ensure audit log entries for ALL FlexSwitch state-changing operations are **reliably persisted** to the `audit_log` table
+- Fix the async delivery issue by switching to synchronous logging for all 10 FlexSwitch audit log calls across 3 services
 - Verify entries are visible on the Monitoring & Analytics > Audit Logs page
 - No changes to API response shapes or database schema
 
@@ -30,23 +32,30 @@ The FlexSwitch module allows students to request course switches, and PMs to app
 - Changing the audit log entity or table structure
 - Adding audit logging for read operations (list, get endpoints)
 - Adding frontend UI changes for viewing these new audit entries (they appear in the existing Audit Logs page automatically)
-- Modifying the existing audit log entries in `PM\FlexSwitchService`
 - Fixing the global async messenger transport configuration (out of scope — sync override is the targeted fix)
 
 ## Decisions
 
-### 1. AuditLogService already injected (done previously)
+### 1. AuditLogService already injected in all services
 - `FlexSwitchApprovalService` — has `AuditLogService` constructor dependency ✅
 - `FlexSwitchService` (student side) — has `AuditLogService` constructor dependency ✅
+- `PM\FlexSwitchService` — has `AuditLogService` constructor dependency ✅
 
-### 2. Audit log entity types and actions (unchanged)
+### 2. Audit log entity types and actions (full scope)
 
-| Operation | Entity Type | Action | Old Data | New Data |
-|-----------|-------------|--------|----------|----------|
-| PM approves request | `FlexSwitchRequest` | `APPROVE FlexSwitchRequest` | status: pending | status: approved, approver, remarks |
-| PM rejects request | `FlexSwitchRequest` | `REJECT FlexSwitchRequest` | status: pending | status: rejected, approver, remarks |
-| Student submits request | `FlexSwitchRequest` | `CREATE FlexSwitchRequest` | null | request details (from/to class, reason) |
-| Student cancels request | `FlexSwitchRequest` | `CANCEL FlexSwitchRequest` | status: pending | status: cancelled, cancellation reason |
+| Operation | Entity Type | Action | Service Method |
+|-----------|-------------|--------|----------------|
+| PM approves request | `FlexSwitchRequest` | `APPROVE FlexSwitchRequest` | `FlexSwitchApprovalService.processApproval()` |
+| PM rejects request | `FlexSwitchRequest` | `REJECT FlexSwitchRequest` | `FlexSwitchApprovalService.processApproval()` |
+| Student submits request | `FlexSwitchRequest` | `CREATE FlexSwitchRequest` | `FlexSwitchService.submitRequest()` |
+| Student cancels request | `FlexSwitchRequest` | `CANCEL FlexSwitchRequest` | `FlexSwitchService.cancelRequest()` |
+| PM creates config | `FlexSwitchConfiguration` | `CREATE FlexSwitchConfiguration` | `PM\FlexSwitchService.createConfiguration()` |
+| PM updates config | `FlexSwitchConfiguration` | `UPDATE FlexSwitchConfiguration` | `PM\FlexSwitchService.createConfiguration()` |
+| PM updates course | `Course` | `UPDATE Course` | `PM\FlexSwitchService.saveCourseAdjustment()` |
+| PM updates class | `Class` | `UPDATE Class` | `PM\FlexSwitchService.saveCourseAdjustment()` |
+| PM updates class promotion | `ClassPromotion` | `UPDATE ClassPromotion` | `PM\FlexSwitchService.saveCourseAdjustment()` |
+| PM creates adjustment | `FlexCourseAdjustment` | `CREATE FlexCourseAdjustment` | `PM\FlexSwitchService.saveCourseAdjustment()` |
+| PM updates adjustment | `FlexCourseAdjustment` | `UPDATE FlexCourseAdjustment` | `PM\FlexSwitchService.saveCourseAdjustment()` |
 
 ### 3. Place audit calls after successful flush (unchanged)
 Following the existing pattern in `PM\FlexSwitchService`, audit log calls are placed after `entityManager->flush()` to ensure we only log successfully persisted operations.
@@ -62,8 +71,8 @@ The previous implementation used the default `async: true`, which dispatches `Au
 
 ### 5. Verification approach
 After applying the fix:
-- Query `audit_log` table directly: `SELECT * FROM audit_log WHERE entity_type = 'FlexSwitchRequest' ORDER BY created_at DESC`
-- Perform test operations (submit, approve, cancel) and confirm entries appear
+- Query `audit_log` table directly: `SELECT * FROM audit_log WHERE entity_type IN ('FlexSwitchRequest', 'Course', 'Class', 'ClassPromotion', 'FlexCourseAdjustment', 'FlexSwitchConfiguration') ORDER BY created_at DESC`
+- Perform test operations (submit, approve, cancel, course adjustment) and confirm entries appear
 - Check the Audit Logs page in the UI (Monitoring & Analytics > Audit Logs)
 
 ## Risks / Trade-offs
