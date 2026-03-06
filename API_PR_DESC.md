@@ -1,45 +1,55 @@
-# Fix Switch Calendar View — Duplicate Module Entries
+# Fix Student Switch — Seat Capacity Filter Not Working Correctly
 
 ## Problem
 
-When a Programme Manager (PM) navigates to **Switch → Dashboard → Calendar View**, duplicate module entries appear on the Gantt-chart timeline. For example, "Module 1: IN_PERSON FBL" shows up multiple times under the same programme row, each containing the same exact courses.
+When a Student navigates to **Switch → clicks on a module → Course list popup** (Figma Screen 2-3), the **Seat Capacity** filter (`seat_min` / `seat_max`) does not work correctly. The filter produces inconsistent results — classes that should be excluded by the filter still appear, and vice versa.
 
-**Root cause:** The `getCalendar()` method in `PM\FlexSwitchService` deduplicates calendar items using the key `deliveryMode_promotionPeriodId_campusId`. The `promotionPeriodId` is the **database entity ID** (unique per promotion×period row), not the **logical period number** (e.g., "1", "2"). When a class has multiple `classPromotion` records linked to different promotions (e.g., J25 and D25 cohorts) that share the same period number but have different `promotionPeriodId` values, each generates a separate calendar item — despite being labeled identically — causing the duplicates.
+**Root cause:** The `getAvailableCourses()` method in `FlexSwitchService` (student-side) filters on **individual** `ClassPromotions.promotionSeats` rows using `WHERE cp.promotionSeats >= :seatMin`, but the displayed `seat_available` value in the response is the **SUM** of all `ClassPromotions.promotionSeats` for that class.
 
-Additionally, `ClassesRepository::findCalendarClassesByProgram()` fetched **all** CORE classes globally without filtering by the requested program, relying entirely on in-memory filtering. This loaded unnecessary data and increased processing time.
+**Example:** A class with 3 ClassPromotions rows of 30 seats each (total = 90) would:
+- ❌ Pass `seat_max=50` filter (because each individual row 30 ≤ 50) — but shows `seat_available = 90`
+- ❌ Incorrectly match the filter while displaying a value that contradicts it
+
+**Secondary issue:** The pagination count query uses `COUNT(cl.id)` without `DISTINCT`, inflating total counts when a class has multiple `ClassPromotions` rows from the JOIN.
+
+> The PM-side `listClassConfiguration()` already handles this correctly using `SUM(cp.promotionSeats)` with `GROUP BY` and `HAVING`.
 
 ## Solution
 
-Two targeted fixes in the API backend — no frontend changes required:
+Single file fix in the API backend — no frontend changes, no migration required:
 
 ### Changes Made
 
 **Modified File:**
 
-1. **`src/Repository/ClassesRepository.php`**
-   - **Method**: `findCalendarClassesByProgram(int $programId)`
-   - Added joins through `classPromotions → promotion → program` to filter classes by program at the SQL level
-   - Added `DISTINCT` to avoid duplicate class rows from the additional joins
-   - This eliminates unnecessary data loading (previously fetched all CORE classes across all programs)
+1. **`src/Service/FlexSwitch/FlexSwitchService.php`**
+   - **Method**: `getAvailableCourses(Student $student, array $filters)`
 
-2. **`src/Service/FlexSwitch/PM/FlexSwitchService.php`**
-   - **Method**: `getCalendar(int $programId)`
-   - Changed the deduplication key from `$modeValue . '_' . $promotionPeriodId . '_' . $campusId` to `$modeValue . '_' . $period . '_' . $campusId`
-   - Uses the logical period number (`$period` from `$promotionPeriod->getPeriod()`) instead of the entity ID (`$promotionPeriodId`)
-   - This ensures modules with the same delivery mode, period number, and campus collapse into a single calendar item
-   - Date range merging (min start_date / max end_date) continues to work correctly
+   **Seat filter fix:**
+   - Removed incorrect `WHERE cp.promotionSeats >= :seatMin` / `<= :seatMax` clauses
+   - Added `GROUP BY cl.id` to aggregate ClassPromotions per class
+   - Added `HAVING SUM(cp.promotionSeats) >= :seatMin` / `<= :seatMax` to filter on total seats
+   - This ensures the filter matches the displayed `seat_available` value
+
+   **Pagination count fix:**
+   - Replaced `clone $qb` + `COUNT(cl.id)` with a dedicated count query using `COUNT(DISTINCT cl2.id)`
+   - All WHERE conditions are replicated on the count query
+   - Seat filter for count uses subquery `(SELECT SUM(cp.promotionSeats) ... WHERE cp.class = cl.id) >= :seatMin` pattern
+   - Follows the same approach as PM's `listClassConfiguration()` count query
 
 ## Impact
 
-- **No API response shape changes**: The `FlexSwitchCalendarDto` structure is unchanged — only duplicate entries are eliminated
-- **No frontend changes needed**: `bidding-admin` and `bidding-web` consume the same response format
+- **No API response shape changes**: The response format remains identical — only the filtering logic is corrected
+- **No frontend changes needed**: `bidding-web` Student Switch UI consumes the same response format
 - **No migration required**: No database schema changes
-- **Performance improvement**: Repository query now filters by program at SQL level instead of loading all CORE classes globally
-- **Backward compatible**: No breaking changes to existing consumers
+- **No breaking changes**: Fixes incorrect behavior; no existing correct behavior is altered
+- **Backward compatible**: Pure business logic fix
 
 ## Verification
 
-- [ ] PM admin panel: Switch → Dashboard → Calendar View shows no duplicate module rows
-- [ ] Each module displays correct date ranges spanning all underlying classes
-- [ ] Clicking a module opens the drawer with the correct course list
-- [ ] API response `GET /flex-switch/calendar?program_id={id}` has no duplicate `module` labels within a group
+- [ ] Student: Switch → Click module → Apply seat_min filter → Only classes with total seats ≥ min shown
+- [ ] Student: Switch → Click module → Apply seat_max filter → Only classes with total seats ≤ max shown
+- [ ] Student: Switch → Click module → Apply seat range → Only classes within range shown
+- [ ] `seat_available` value in each result matches the filter criteria
+- [ ] `pagination.total_items` is accurate (not inflated by JOINs)
+- [ ] No regression in basic course listing without seat filters
