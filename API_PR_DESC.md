@@ -1,57 +1,40 @@
-# Fix Student Switch — Seat Capacity Filter Not Working Correctly
+# Fix Switch Notification — PM Not Notified on Student Cancel
 
 ## Problem
 
-When a Student navigates to **Switch → clicks on a module → Course list popup** (Figma Screen 2-3), the **Seat Capacity** filter (`seat_min` / `seat_max`) does not work correctly. The filter produces inconsistent results — classes that should be excluded by the filter still appear, and vice versa.
-
-**Root cause:** The `getAvailableCourses()` method in `FlexSwitchService` (student-side) filters on **individual** `ClassPromotions.promotionSeats` rows using `WHERE cp.promotionSeats >= :seatMin`, but the displayed `seat_available` value in the response is the **SUM** of all `ClassPromotions.promotionSeats` for that class (computed in `formatCourses()`).
-
-**Example:** A class with 3 ClassPromotions rows of 30 seats each (total = 90) would:
-- ❌ Pass `seat_max=50` filter (because each individual row 30 ≤ 50) — but shows `seat_available = 90`
-- ❌ Incorrectly match the filter while displaying a value that contradicts it
-
-**Secondary issue:** The pagination count query uses `COUNT(cl.id)` without `DISTINCT`, inflating total counts when a class has multiple `ClassPromotions` rows from the JOIN.
-
-> The PM-side `listCourse()` already handles this correctly using PHP-level seat filtering after entity hydration.
+When a student cancels a flex switch request via `PUT /student/flex-switch/my-requests/{id}/cancel`, Programme Manager (PM) users do not receive any notification about the cancellation. PMs already receive notifications when a student **submits** a switch request (implemented in `FlexSwitchService::submitRequest()`), but the `cancelRequest()` method was missing the same notification logic. This means PMs have no visibility into cancelled requests unless they manually check the approval dashboard.
 
 ## Solution
 
-Single file fix in the API backend — no frontend changes, no migration required.
+Added PM notification dispatch to `FlexSwitchService::cancelRequest()`, following the exact same pattern already used in `submitRequest()`.
 
 ### Changes Made
 
 **Modified File:**
 
 1. **`src/Service/FlexSwitch/FlexSwitchService.php`**
-   - **Method**: `getAvailableCourses(Student $student, array $filters)`
-
-   **Seat filter fix:**
-   - Removed incorrect `WHERE cp.promotionSeats >= :seatMin` / `<= :seatMax` DQL clauses
-   - Seat filtering is now done **in PHP** after fetching entities — computes the total SUM of all `ClassPromotions.promotionSeats` per class, then filters against `seat_min`/`seat_max`
-   - This ensures the filter matches the exact same `seat_available` value displayed in the response
-   - Follows the PM's `listCourse()` pattern (PHP-level filtering) — `GROUP BY + HAVING SUM()` cannot be used here because the query uses Doctrine entity hydration
-
-   **Two execution paths:**
-   - **Without seat filters**: Standard DB-level pagination with `COUNT(DISTINCT cl.id)` — efficient, no behavior change
-   - **With seat filters**: Fetches all matching classes → filters by seat sum in PHP → paginates with `array_slice()` — correct results
-
-   **Pagination count fix:**
-   - Changed `COUNT(cl.id)` to `COUNT(DISTINCT cl.id)` to avoid inflated totals from JOINed ClassPromotions rows
-   - When seat filters are active, total count comes from `count($filteredClasses)` after PHP filtering
+   - **Method**: `cancelRequest(int $requestId, Student $student, string $cancellationReason)`
+   - Added notification trigger after successful cancellation save (after `$this->requestRepository->save()`)
+   - Resolves the student's Promotion → Program → ProgramManagers chain to find PM recipients
+   - Resolves from/to course names from the request's class IDs
+   - Sends a `CUSTOM_ANNOUNCEMENT` bulk notification to all PM users via `NotificationService::createBulk()` with:
+     - **Title**: "Flex Switch Request Cancelled"
+     - **Body**: "Student {name} has cancelled their switch request from {fromCourse} to {toCourse}. Reason: {reason}."
+     - **Data**: `request_id`, `student_id`, `from_course`, `to_course`, `cancellation_reason`
+   - Gracefully handles edge cases: no promotion, no program, no PMs configured — cancellation still succeeds without errors
 
 ## Impact
 
-- **No API response shape changes**: The response format remains identical — only the filtering logic is corrected
-- **No frontend changes needed**: `bidding-web` Student Switch UI consumes the same response format
+- **No API response shape changes**: The `PUT /student/flex-switch/my-requests/{id}/cancel` response is unchanged
+- **No frontend changes needed**: Notification appears in existing PM notification feed
 - **No migration required**: No database schema changes
-- **No breaking changes**: Fixes incorrect behavior; no existing correct behavior is altered
-- **Backward compatible**: Pure business logic fix
+- **No new dependencies**: Uses existing `NotificationService` and `UserRepository` already injected into the service
+- **Backward compatible**: Purely additive side-effect — cancellation behavior is unchanged
 
 ## Verification
 
-- [ ] Student: Switch → Click module → Apply seat_min filter → Only classes with total seats ≥ min shown
-- [ ] Student: Switch → Click module → Apply seat_max filter → Only classes with total seats ≤ max shown
-- [ ] Student: Switch → Click module → Apply seat range → Only classes within range shown
-- [ ] `seat_available` value in each result matches the filter criteria
-- [ ] `pagination.total_items` is accurate (not inflated by JOINs)
-- [ ] No regression in basic course listing without seat filters
+- [ ] Call `PUT /v2/api/student/flex-switch/my-requests/{id}/cancel` with a valid cancellation reason on a pending request
+- [ ] Verify the request is cancelled successfully (status 200)
+- [ ] Check the `notification` table for new PM notification records with title "Flex Switch Request Cancelled"
+- [ ] Verify notification body contains correct student name, course names, and cancellation reason
+- [ ] Verify no notification error when student has no promotion/program or no PMs are configured
