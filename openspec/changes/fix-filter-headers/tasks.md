@@ -75,7 +75,14 @@
 - [x] 9.8 Add sort cases in the `sortedCourses` `useMemo` switch statement for `seat`, `conflict`, `fallback` (numeric comparison) and `promotions` (string comparison, handle null).
 - [ ] 9.9 In the admin UI, navigate to Settings > Courses, click each of the 4 new sortable column headers and verify the sort icon toggles and data re-sorts correctly.
 
-## 10. Verification
+## 11. Fix `promotions` Computed Sort in ClassController::filterClasses()
+
+- [x] 11.1 In `bidding-api/src/Controller/Api/Class/ClassController.php`, in `filterClasses()`, add `'promotions'` to the first `$computedSortFields` array (line ~524): `['total_seats', 'total_conflicts', 'total_fallback', 'promotions']`.
+- [x] 11.2 Add `'promotions'` to the second `$computedSortFields` array inside the `if ($sort !== null)` block (line ~552).
+- [x] 11.3 Add a `case 'promotions':` to the computed sort switch statement (after `case 'total_fallback':`). Compute promotion labels by iterating `$class->getClassPromotions()`, collecting unique labels, and joining with `implode(', ', array_unique($promotionLabels))`. Store as string in `$sortValues[$classId]`.
+- [ ] 11.4 Test `GET /v2/api/classes?sort=promotions&order=ASC&campaign_id=1&promotion_id=1` — must return HTTP 200 with classes sorted by promotion labels, no `Field "promotions" is not allowed for sorting` error.
+
+## 12. Verification
 
 - [ ] 10.1 Test `GET /v2/api/courses?page=1&limit=10&sort=credits&order=ASC` — must return HTTP 200 with sorted courses, no SQL error 1055.
 - [ ] 10.2 Test `GET /v2/api/courses?page=1&limit=10&sort=name&order=ASC` — must return HTTP 200.

@@ -21,6 +21,7 @@ Multiple SQL errors occur when sorting admin dashboard tables:
 - **Fix course sort field mapping**: Add `course_class_section` → `cl.section` to the `$sortFieldMap` in `CourseController::filterCourses()`, and add `cl.section` and `ct.name` to `CourseListQueryValidator::sortConstraints()`.
 - **Add `class_id` to course list response**: Add a `class_id` property to `CourseDto`, populate it in `CourseController::filterCourses()`, and add it to the frontend `SingleCourse` type.
 - **Add sorting for computed columns (seat, conflict, fallback, promotions)**: These four columns are computed in PHP after the SQL query (seat = totalSeats - enrolled - invited - waitlisted; conflict = count of conflict IDs; fallback = hardcoded 0; promotions = comma-separated labels). Since they can't be sorted at SQL level, implement in-memory sorting in `CourseController::filterCourses()`: when sorting by a computed field, fetch all records without SQL-level pagination, compute all fields, sort the array in PHP, then slice for pagination. Update the frontend `course-table-setting.tsx` to make these 4 columns sortable with backend sort support.
+- **Fix `promotions` sort in ClassController**: `ClassController::filterClasses()` (at `/v2/api/classes`) already handles computed sorts for `total_seats`, `total_conflicts`, `total_fallback`, but is missing `promotions` from the `$computedSortFields` array. The campaign class list (`class-list-campaign.tsx`) sends `sort=promotions` which falls through to the `QueryValidator`, causing `Field "promotions" is not allowed for sorting`. Fix: add `promotions` to both `$computedSortFields` declarations and add a `promotions` case to the switch statement.
 
 ## Capabilities
 
@@ -43,6 +44,7 @@ Multiple SQL errors occur when sorting admin dashboard tables:
 - **`bidding-api/src/Domain/Course/CourseDto.php`**: Add `class_id` property.
 - **`bidding-admin/src/src/course/course-response.ts`**: Add `class_id` to `SingleCourse` type.
 - **`bidding-api/src/Controller/Api/Course/CourseController.php`**: `filterCourses()` method — add in-memory sorting logic for computed fields (`seat`, `conflict`, `fallback`, `promotions`). When sorting by a computed field, disable SQL-level pagination, compute all fields, sort in PHP, then slice for pagination.
+- **`bidding-api/src/Controller/Api/Class/ClassController.php`**: `filterClasses()` method — add `promotions` to existing `$computedSortFields` array and add `promotions` case to the computed sort switch statement. The campaign class list frontend sends `sort=promotions` to this endpoint.
 - No database schema changes, no migration required.
 - API response shape change: `class_id` field added to course list items (additive, non-breaking).
 - Sort behavior change: sorting by `seat`, `conflict`, `fallback`, `promotions` uses in-memory sorting (all records fetched, sorted in PHP, then paginated).

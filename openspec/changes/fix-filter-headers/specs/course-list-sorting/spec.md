@@ -144,16 +144,35 @@ Fix sorting on the courses list endpoint so that all sortable columns work witho
 - **Then** the frontend sends `sort=promotions&order=ASC` to the backend
 - **And** the table re-renders with courses sorted alphabetically by promotion labels
 
-### API Endpoint
+### Scenario: Sort classes by promotions via ClassController (campaign class list)
 
-- **Method**: GET/POST `/v2/api/courses` (mapped to `CourseController::filterCourses()`)
+- **Given** the admin views the campaign class list which calls `GET /v2/api/classes?sort=promotions&order=ASC&campaign_id=1&promotion_id=1`
+- **When** the backend detects `promotions` is a computed sort field in `ClassController::filterClasses()`
+- **Then** the backend fetches all matching classes, computes promotion labels for each
+- **And** sorts alphabetically by the comma-separated promotion string in PHP
+- **And** returns the correct page slice with accurate pagination
+- **And** no `Field "promotions" is not allowed for sorting` error occurs
+
+### API Endpoints
+
+**Course endpoint** (`CourseController::filterCourses()`):
+- **Method**: GET/POST `/v2/api/courses`
 - **Sort parameters**: `sort` (field name: name, credits, credit, type, id, course_class_section, seat, conflict, fallback, promotions) + `order` (ASC/DESC)
 - **SQL-sortable fields**: name, credits, credit, type, id, course_class_section — sorted via DQL ORDER BY
 - **Computed-sortable fields**: seat, conflict, fallback, promotions — sorted via PHP in-memory sort after fetching all records
+
+**Class endpoint** (`ClassController::filterClasses()`):
+- **Method**: GET/POST `/v2/api/classes`
+- **Sort parameters**: `sort` (field name: section, id, name, course, campus_course_name, course_id, credit, credits, course_credit, campus, campus_name, deadline, total_seats, total_conflicts, total_fallback, promotions) + `order` (ASC/DESC)
+- **SQL-sortable fields**: section, id, name, course, campus_course_name, course_id, credit, credits, course_credit, campus, campus_name, deadline — mapped via `$fieldMapping` then sorted via DQL ORDER BY
+- **Computed-sortable fields**: total_seats, total_conflicts, total_fallback, promotions — sorted via PHP in-memory sort after fetching all records
+
+**Root causes and fixes**:
 - **Root cause 1 (SQL 1055)**: `ClassesRepository::searchQueryPaginated()` line ~697 uses `GROUP BY cl.id, c.id, s.id, ct.id, cam.id, stat.id` in campaign mode, but Doctrine Paginator with `fetchJoinCollection: true` wraps the query in a subquery that includes columns from LEFT JOINed `cp`, `p`, `pp` tables not in GROUP BY
 - **Fix location 1**: `ClassesRepository::searchQueryPaginated()` — set `fetchJoinCollection` to `false` when `campaignGroupMode` is true
 - **Root cause 2 (sort mapping)**: `CourseController::filterCourses()` `$sortFieldMap` missing `course_class_section` entry; `CourseListQueryValidator::sortConstraints()` missing `ct.name` and `cl.section`
 - **Fix location 2**: `CourseController::filterCourses()` `$sortFieldMap` + `CourseListQueryValidator::sortConstraints()`
 - **Fix location 3**: `CourseController::filterCourses()` — add computed-field detection and in-memory sorting with post-sort pagination
 - **Fix location 4**: `course-table-setting.tsx` — add seat, conflict, fallback, promotions to `SortField`, `fieldMapping`, `backendSortableFields`, and column header click handlers
+- **Fix location 5**: `ClassController::filterClasses()` — add `promotions` to `$computedSortFields` array and add `promotions` case to computed sort switch statement
 - **Response shape**: `class_id` (integer) added to each course list item — additive, non-breaking

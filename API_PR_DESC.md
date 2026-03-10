@@ -30,6 +30,12 @@ The course list endpoint iterates over Class entities but does not expose the cl
 
 The course list table columns `seat`, `conflict`, `fallback`, and `promotions` are computed in PHP after the SQL query (seat = totalSeats - enrolled - invited - waitlisted; conflict = count of conflict IDs; fallback = hardcoded 0; promotions = comma-separated labels). These fields cannot be sorted at the SQL/DQL level, so clicking these column headers in the admin UI had no backend sort effect.
 
+### 6. Class list — `promotions` sort triggers "not allowed for sorting"
+
+The class list endpoint (`GET /v2/api/classes`, mapped to `ClassController::filterClasses()`) already supports in-memory sorting for `total_seats`, `total_conflicts`, `total_fallback`. However, the campaign class list frontend (`class-list-campaign.tsx`) defines `promotions` as a sortable column, but `promotions` is NOT in the `$computedSortFields` array. When `sort=promotions` is sent, it falls through to the standard DB-level sort path where `QueryValidator::getSortField()` rejects it.
+
+**Root cause**: `$computedSortFields` (declared twice in `filterClasses()`) only contains `['total_seats', 'total_conflicts', 'total_fallback']` — missing `promotions`. The sort value passes through unmapped to `ClassService::getList()` → `QueryValidator::validate()` → `getSortField('promotions')` which throws.
+
 ## Solution
 
 ### 1. Course list — Disable `fetchJoinCollection` in campaign group mode
@@ -93,6 +99,11 @@ Null values are pushed to the end of the sorted list regardless of sort directio
    - After the DTO-building loop: `usort()` sorts `$response->items` by the computed field with direction support
    - Post-sort: `array_slice()` for pagination, rebuilds `$response->pagination` with correct totals
 
+7. **`src/Controller/Api/Class/ClassController.php`**
+   - **Method**: `filterClasses()`
+   - Added `'promotions'` to both `$computedSortFields` arrays (lines ~524 and ~552)
+   - Added `case 'promotions':` to the computed sort switch statement — computes promotion labels from `$class->getClassPromotions()`, joins unique labels, stores as string sort value
+
 ## Impact
 
 - **API response shape change**: `class_id` (integer) field added to course list items — additive, non-breaking
@@ -119,3 +130,5 @@ Null values are pushed to the end of the sorted list regardless of sort directio
 - [ ] Sort student list by Home Campus (`sort=home_campus&order=asc`) — returns 200
 - [ ] Pagination totals are correct for both endpoints
 - [ ] Sorting combined with filters returns correct results
+- [ ] `GET /v2/api/classes?sort=promotions&order=ASC&campaign_id=1&promotion_id=1` — returns 200, sorted by promotion labels (no "not allowed for sorting" error)
+- [ ] Campaign class list UI: click Promotions column header — sorts without 500 error

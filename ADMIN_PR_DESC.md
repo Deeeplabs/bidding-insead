@@ -67,3 +67,4 @@ Fixed the frontend sort field mapping, sort payload format, standardized all cou
 - [ ] Click Fallbacks column header — sort icon toggles and data re-sorts
 - [ ] Click Promotions column header — sort icon toggles and data re-sorts alphabetically by promotion labels
 - [ ] Verify sort toggles cycle: ASC (↑) → DESC (↓) → clear (↕)
+- [ ] In Campaign class list, click Promotions column header — verify sorting works without 500 error (requires backend fix in `ClassController::filterClasses()`)

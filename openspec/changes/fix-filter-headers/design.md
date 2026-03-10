@@ -292,6 +292,18 @@ const backendSortableFields: SortField[] = ['name', 'credits', 'type', 'seat', '
 - Both approaches would complicate the already-complex `searchQueryPaginated()` DQL query
 - In-memory sort is simpler, safer, and sufficient for the dataset size
 
+### 9. Fix `promotions` Computed Sort in ClassController::filterClasses()
+
+**Problem**: The class list endpoint (`GET /v2/api/classes`, mapped to `ClassController::filterClasses()`) already supports in-memory sorting for `total_seats`, `total_conflicts`, and `total_fallback`. However, the campaign class list frontend (`class-list-campaign.tsx`) defines `promotions` as a sortable column (`{ key: 'promotions', label: 'Promotions', sortable: true }`), but `promotions` is NOT in the `$computedSortFields` array. When `sort=promotions` is sent, it falls through to the standard DB-level sort path where `QueryValidator::getSortField()` rejects it: `Field "promotions" is not allowed for sorting.`
+
+**Root cause**: Two separate endpoints handle class/course listing with different computed sort field lists:
+- `CourseController::filterCourses()` (`/v2/api/courses`) — used by Settings course list
+- `ClassController::filterClasses()` (`/v2/api/classes`) — used by Campaign class list
+
+The `ClassController` was missing `promotions` from its `$computedSortFields` array (declared twice at lines ~524 and ~552) and had no `promotions` case in its computed sort switch statement.
+
+**Fix**: Add `'promotions'` to both `$computedSortFields` declarations in `ClassController::filterClasses()` and add a `promotions` case to the switch statement that computes sort values by joining unique promotion labels from `$class->getClassPromotions()`.
+
 ## Risks / Trade-offs
 
 - **Risk: `fetchJoinCollection: false` causes incorrect pagination** → Mitigation: The `GROUP BY cl.id` already ensures one row per class, making the Paginator's subquery-based dedup unnecessary. The count is already overridden via `totalOverride`. Tested: the non-campaign mode path with `fetchJoinCollection: true` remains untouched.
