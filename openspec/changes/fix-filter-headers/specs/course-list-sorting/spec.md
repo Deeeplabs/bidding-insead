@@ -27,9 +27,23 @@ Fix sorting on the courses list endpoint so that all sortable columns work witho
 ### Scenario: Sort courses by type
 
 - **Given** the admin calls `GET /v2/api/courses?page=1&limit=10&sort=type&order=ASC`
-- **When** the backend processes the request
+- **When** the backend processes the request and maps `type` → `ct.name` via `$sortFieldMap`, then validates against `CourseListQueryValidator::sortConstraints()` which includes `ct.name`
 - **Then** the API returns courses sorted by course type name in ascending order
-- **And** no SQL error occurs
+- **And** no SQL error or validation error occurs
+
+### Scenario: Sort courses by section (course_class_section)
+
+- **Given** the admin calls `GET /v2/api/courses?page=1&limit=10&sort=course_class_section&order=ASC`
+- **When** the backend processes the request and maps `course_class_section` → `cl.section` via `$sortFieldMap`, then validates against `CourseListQueryValidator::sortConstraints()` which includes `cl.section`
+- **Then** the API returns courses sorted by class section in ascending order
+- **And** no "Field not allowed for sorting" error occurs
+
+### Scenario: Course list response includes class_id
+
+- **Given** the admin calls `GET /v2/api/courses?page=1&limit=10`
+- **When** the backend processes the request through `CourseController::filterCourses()` and iterates over Class entities
+- **Then** each item in the response includes a `class_id` field with the integer ID of the Class entity
+- **And** the `class_id` is distinct per class section row
 
 ### Scenario: Sort courses with filters applied
 
@@ -49,7 +63,9 @@ Fix sorting on the courses list endpoint so that all sortable columns work witho
 ### API Endpoint
 
 - **Method**: GET/POST `/v2/api/courses` (mapped to `CourseController::filterCourses()`)
-- **Sort parameters**: `sort` (field name: name, credits, credit, type, id) + `order` (ASC/DESC)
-- **Root cause**: `ClassesRepository::searchQueryPaginated()` line ~697 uses `GROUP BY cl.id, c.id, s.id, ct.id, cam.id, stat.id` in campaign mode, but Doctrine Paginator with `fetchJoinCollection: true` wraps the query in a subquery that includes columns from LEFT JOINed `cp`, `p`, `pp` tables not in GROUP BY
-- **Fix location**: `ClassesRepository::searchQueryPaginated()` — set `fetchJoinCollection` to `false` when `campaignGroupMode` is true
-- **Response shape**: No changes — existing paginated course list response
+- **Sort parameters**: `sort` (field name: name, credits, credit, type, id, course_class_section) + `order` (ASC/DESC)
+- **Root cause 1 (SQL 1055)**: `ClassesRepository::searchQueryPaginated()` line ~697 uses `GROUP BY cl.id, c.id, s.id, ct.id, cam.id, stat.id` in campaign mode, but Doctrine Paginator with `fetchJoinCollection: true` wraps the query in a subquery that includes columns from LEFT JOINed `cp`, `p`, `pp` tables not in GROUP BY
+- **Fix location 1**: `ClassesRepository::searchQueryPaginated()` — set `fetchJoinCollection` to `false` when `campaignGroupMode` is true
+- **Root cause 2 (sort mapping)**: `CourseController::filterCourses()` `$sortFieldMap` missing `course_class_section` entry; `CourseListQueryValidator::sortConstraints()` missing `ct.name` and `cl.section`
+- **Fix location 2**: `CourseController::filterCourses()` `$sortFieldMap` + `CourseListQueryValidator::sortConstraints()`
+- **Response shape**: `class_id` (integer) added to each course list item — additive, non-breaking

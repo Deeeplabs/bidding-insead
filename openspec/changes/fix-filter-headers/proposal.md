@@ -8,17 +8,23 @@ Multiple SQL errors occur when sorting admin dashboard tables:
 
 3. **Frontend inconsistencies**: Course and student table headers use inconsistent naming (e.g., "Credit" vs "Credits", "Seat Available" vs "Seats Available"), and student settings sort field mapping sends incorrect field names to the backend.
 
+4. **Course list sort field mapping incomplete**: Sorting the course list by `course_class_section` (Section column) triggers `Field "course_class_section" is not allowed for sorting`. Root cause: `CourseController::filterCourses()` `$sortFieldMap` does not include `course_class_section`, so the value passes through unmapped. Additionally, `CourseListQueryValidator::sortConstraints()` only allows `c.name`, `c.id`, `c.credit` — it is missing `cl.section` (for section) and `ct.name` (for type).
+
+5. **Missing `class_id` in course list response**: The course list endpoint returns `CourseDto` objects that lack a `class_id` field. Since `filterCourses()` iterates over Class entities (not Course entities), each response item represents a class section, but the class ID is not exposed in the response.
+
 ## What Changes
 
 - **Fix course list GROUP BY conflict**: In `ClassesRepository::searchQueryPaginated()`, when `campaignGroupMode` is true, set the Doctrine Paginator's `fetchJoinCollection` to `false` (since `GROUP BY cl.id` already deduplicates rows), preventing the Paginator from generating a wrapping subquery that includes non-grouped columns.
 - **Fix student list DISTINCT + ORDER BY conflict**: Modify `StudentRepository::queryPaginated()` to replace `SELECT DISTINCT` with `GROUP BY s.id`, so that MySQL allows ORDER BY on joined columns.
 - **Fix frontend sort field mapping**: Ensure `student-setting-table.tsx` `fieldMapping` values match what `StudentService::listStudents()` expects.
 - **Standardize table headers**: Normalize column labels across course and student tables in `bidding-admin`.
+- **Fix course sort field mapping**: Add `course_class_section` → `cl.section` to the `$sortFieldMap` in `CourseController::filterCourses()`, and add `cl.section` and `ct.name` to `CourseListQueryValidator::sortConstraints()`.
+- **Add `class_id` to course list response**: Add a `class_id` property to `CourseDto`, populate it in `CourseController::filterCourses()`, and add it to the frontend `SingleCourse` type.
 
 ## Capabilities
 
 ### Modified Capabilities
-- `course-list-sorting`: Fix backend query in `ClassesRepository::searchQueryPaginated()` to support sorting courses by any field without triggering SQL error 1055 when in campaign group mode.
+- `course-list-sorting`: Fix backend query in `ClassesRepository::searchQueryPaginated()` to support sorting courses by any field without triggering SQL error 1055 when in campaign group mode. Add missing sort field mappings (`course_class_section` → `cl.section`) and update `CourseListQueryValidator` to allow all mapped sort fields. Add `class_id` to the course list response DTO.
 - `student-list-sorting`: Fix backend query to support sorting by Promotion, Programme, and Home Campus columns without triggering SQL error 3065.
 - `student-list-headers`: Standardize student table column headers across all dashboard views.
 - `course-list-headers`: Standardize course table column headers across all dashboard views (Pre-Bidding, Bidding Round, Add-Drop, Settings).
@@ -32,5 +38,8 @@ Multiple SQL errors occur when sorting admin dashboard tables:
 - **`bidding-admin/src/components/dashboard/process/add-drop/course-table.tsx`**: Standardize column labels.
 - **`bidding-admin/src/components/dashboard/process/bidding-round/course-table-bidding-round.tsx`**: Standardize column labels.
 - **`bidding-admin/src/components/settings/course-table-setting.tsx`**: Standardize column labels if needed.
+- **`bidding-api/src/Domain/Course/CourseListQueryValidator.php`**: `sortConstraints()` — must add `cl.section` and `ct.name` to allowed sort fields.
+- **`bidding-api/src/Domain/Course/CourseDto.php`**: Add `class_id` property.
+- **`bidding-admin/src/src/course/course-response.ts`**: Add `class_id` to `SingleCourse` type.
 - No database schema changes, no migration required.
-- No API response shape changes — purely backend query fix and frontend label/mapping corrections.
+- API response shape change: `class_id` field added to course list items (additive, non-breaking).

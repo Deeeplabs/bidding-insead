@@ -8,6 +8,10 @@ Two distinct SQL errors occur in the admin dashboard:
 
 Additionally, frontend sort field names don't match backend expectations, and course/student table headers have minor inconsistencies.
 
+3. **Course sort field mapping incomplete** — Sorting by `course_class_section` triggers `Field "course_class_section" is not allowed for sorting`. `CourseController::filterCourses()` `$sortFieldMap` (line ~315) does not include `course_class_section`, so the value passes through unmapped to the validator. `CourseListQueryValidator::sortConstraints()` only allows `c.name`, `c.id`, `c.credit` — missing `cl.section` (for section) and `ct.name` (for type).
+
+4. **Missing `class_id` in course list response** — The `filterCourses()` endpoint iterates over Class entities and maps them to `CourseDto`, but the class entity's ID is not included in the response. This makes it impossible for the frontend to uniquely identify class sections.
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -15,11 +19,13 @@ Additionally, frontend sort field names don't match backend expectations, and co
 - Fix the SQL 3065 error so all student list sort columns work without 500 errors
 - Align frontend sort field names with backend expected values
 - Standardize table column labels across course and student tables
+- Fix course sort field mapping so `course_class_section` and `type` sorting work
+- Add `class_id` to the course list response
 
 **Non-Goals:**
 - Changing the pagination or filter logic beyond what's needed to fix the SQL errors
 - Adding new sort fields or filter capabilities
-- Modifying API response DTOs
+- Modifying API response DTOs beyond adding `class_id`
 
 ## Decisions
 
@@ -117,7 +123,73 @@ const fieldMapping: Record<SortField, string> = {
 
 **Fix**: Change `handleSort` in the settings page to send sort as a simple string matching the backend's expected field names (e.g., `first_name`, `promotion_name`), not DQL paths. The default sort should be `first_name` instead of `s.lastName`.
 
-### 5. Standardize Table Headers
+### 5. Fix Course Sort Field Mapping
+
+**Problem**: `CourseController::filterCourses()` (line ~315) has a `$sortFieldMap`:
+```php
+$sortFieldMap = [
+    'name' => 'c.name',
+    'id' => 'c.id',
+    'credits' => 'c.credit',
+    'credit' => 'c.credit',
+    'type' => 'ct.name',
+];
+$field = $sortFieldMap[$request->sort] ?? $request->sort;
+```
+
+`course_class_section` is not in the map, so it passes through as-is. Then `CourseListQueryValidator::sortConstraints()` rejects it because only `c.name`, `c.id`, `c.credit` are allowed. Additionally, `ct.name` (for type sorting) is in the `$sortFieldMap` but NOT in the validator, so type sorting would also fail.
+
+**Fix**:
+1. Add `'course_class_section' => 'cl.section'` to `$sortFieldMap` in `CourseController::filterCourses()`
+2. Add `SortValidationConstraint::any('cl.section')` and `SortValidationConstraint::any('ct.name')` to `CourseListQueryValidator::sortConstraints()`
+
+```php
+// CourseController::filterCourses() $sortFieldMap:
+$sortFieldMap = [
+    'name' => 'c.name',
+    'id' => 'c.id',
+    'credits' => 'c.credit',
+    'credit' => 'c.credit',
+    'type' => 'ct.name',
+    'course_class_section' => 'cl.section',
+];
+
+// CourseListQueryValidator::sortConstraints():
+public function sortConstraints(): array
+{
+    return [
+        SortValidationConstraint::any('c.name'),
+        SortValidationConstraint::any('c.id'),
+        SortValidationConstraint::any('c.credit'),
+        SortValidationConstraint::any('ct.name'),
+        SortValidationConstraint::any('cl.section'),
+    ];
+}
+```
+
+**Why this is safe**: The `cl` alias refers to the Class entity which is the root entity in `ClassesRepository::searchQueryPaginated()`. The `ct` alias is for CourseType, always joined. Both columns are safe to ORDER BY.
+
+### 6. Add `class_id` to Course List Response
+
+**Problem**: `CourseController::filterCourses()` iterates over Class entities but only maps the parent Course to `CourseDto`. The class entity's ID is not exposed, making it impossible for the frontend to uniquely identify class sections.
+
+**Fix**:
+1. Add `public ?int $class_id = null;` to `CourseDto`
+2. In `CourseController::filterCourses()`, set `$courseDto->class_id = $class->getId();` after mapping
+3. Add `class_id: number;` to `SingleCourse` type in `course-response.ts`
+
+```php
+// CourseDto.php — add property:
+#[OA\Property(type: 'integer', example: 42, nullable: true, description: 'Class section ID')]
+public ?int $class_id = null;
+
+// CourseController::filterCourses() — after $courseDto = $this->mapper->map(...):
+$courseDto->class_id = $class->getId();
+```
+
+**Why this is safe**: Additive change — no existing consumers are affected. The `class_id` is simply the primary key of the Class entity that is already being iterated.
+
+### 7. Standardize Table Headers
 
 **Course tables — changes needed:**
 - `course-table-bidding-round.tsx`: "Seat Available" → "Seats Available"
@@ -131,3 +203,5 @@ const fieldMapping: Record<SortField, string> = {
 - **Risk: GROUP BY changes query performance in StudentRepository** → Mitigation: GROUP BY on primary key (`s.id`) is functionally equivalent to DISTINCT on the entity and should not impact performance. MySQL optimizes `GROUP BY primary_key` efficiently.
 - **Risk: Paginator behavior with GROUP BY in StudentRepository** → Mitigation: The Paginator is already instantiated with `fetchJoinCollection: false`, so the count query will work correctly with GROUP BY.
 - **Risk: Changing sort field names breaks existing saved state** → Mitigation: Sort state is ephemeral (in React state), not persisted. Users will simply get a fresh default sort on next page load.
+- **Risk: `cl.section` ORDER BY in campaign group mode** → Mitigation: `cl.section` is a column on the Class entity (root entity, alias `cl`), which is included in the GROUP BY clause. ORDER BY on grouped columns is always valid.
+- **Risk: Adding `class_id` breaks existing API consumers** → Mitigation: Additive field only. Existing consumers ignore unknown fields. No existing field is changed or removed.
