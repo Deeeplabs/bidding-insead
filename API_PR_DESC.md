@@ -1,40 +1,36 @@
-# Fix Switch Notification — PM Not Notified on Student Cancel
+# Fix Student List Sorting — SQL Error 3065 (DISTINCT + ORDER BY)
 
 ## Problem
 
-When a student cancels a flex switch request via `PUT /student/flex-switch/my-requests/{id}/cancel`, Programme Manager (PM) users do not receive any notification about the cancellation. PMs already receive notifications when a student **submits** a switch request (implemented in `FlexSwitchService::submitRequest()`), but the `cancelRequest()` method was missing the same notification logic. This means PMs have no visibility into cancelled requests unless they manually check the approval dashboard.
+When sorting the student list by columns from joined entities (Promotion, Programme, Home Campus), the API returns a 500 error with MySQL 8 error 3065: "Expression #1 of ORDER BY clause is not in SELECT list, references column 'bidding.p2_.label' which is not in SELECT list; this is incompatible with DISTINCT".
+
+**Root cause**: `StudentRepository::queryPaginated()` uses `SELECT DISTINCT s` (Doctrine entity). When `FilterableQueryProvider` applies an `ORDER BY` on a joined column (e.g., `p.label` for Promotion, `c.label` for Campus, `prog.name` for Programme), MySQL 8's strict mode rejects it because the ORDER BY column is not in the SELECT DISTINCT list.
 
 ## Solution
 
-Added PM notification dispatch to `FlexSwitchService::cancelRequest()`, following the exact same pattern already used in `submitRequest()`.
+Replaced `SELECT DISTINCT` with `GROUP BY` on the primary key, which achieves the same row deduplication without imposing the SELECT-list restriction on ORDER BY columns.
 
 ### Changes Made
 
 **Modified File:**
 
-1. **`src/Service/FlexSwitch/FlexSwitchService.php`**
-   - **Method**: `cancelRequest(int $requestId, Student $student, string $cancellationReason)`
-   - Added notification trigger after successful cancellation save (after `$this->requestRepository->save()`)
-   - Resolves the student's Promotion → Program → ProgramManagers chain to find PM recipients
-   - Resolves from/to course names from the request's class IDs
-   - Sends a `CUSTOM_ANNOUNCEMENT` bulk notification to all PM users via `NotificationService::createBulk()` with:
-     - **Title**: "Flex Switch Request Cancelled"
-     - **Body**: "Student {name} has cancelled their switch request from {fromCourse} to {toCourse}. Reason: {reason}."
-     - **Data**: `request_id`, `student_id`, `from_course`, `to_course`, `cancellation_reason`
-   - Gracefully handles edge cases: no promotion, no program, no PMs configured — cancellation still succeeds without errors
+1. **`src/Repository/StudentRepository.php`**
+   - **Method**: `queryPaginated(Pagination $pagination, array $filters, Sort $sort)`
+   - Replaced `->select("DISTINCT $alias")` with `->select($alias)` + `->groupBy("$alias.id")`
+   - `GROUP BY s.id` deduplicates rows (student can appear multiple times due to LEFT JOINs on studentData, campus, etc.) while allowing ORDER BY on any joined column
+   - Paginator already uses `fetchJoinCollection: false`, so count query works correctly with GROUP BY
 
 ## Impact
 
-- **No API response shape changes**: The `PUT /student/flex-switch/my-requests/{id}/cancel` response is unchanged
-- **No frontend changes needed**: Notification appears in existing PM notification feed
+- **No API response shape changes**: Same paginated student list response
+- **No frontend changes needed**: Backend-only query fix
 - **No migration required**: No database schema changes
-- **No new dependencies**: Uses existing `NotificationService` and `UserRepository` already injected into the service
-- **Backward compatible**: Purely additive side-effect — cancellation behavior is unchanged
+- **Backward compatible**: `GROUP BY primary_key` is functionally equivalent to `DISTINCT` on the entity
 
 ## Verification
 
-- [ ] Call `PUT /v2/api/student/flex-switch/my-requests/{id}/cancel` with a valid cancellation reason on a pending request
-- [ ] Verify the request is cancelled successfully (status 200)
-- [ ] Check the `notification` table for new PM notification records with title "Flex Switch Request Cancelled"
-- [ ] Verify notification body contains correct student name, course names, and cancellation reason
-- [ ] Verify no notification error when student has no promotion/program or no PMs are configured
+- [ ] Sort student list by Promotion (`sort=promotion_name&order=asc`) — should return 200 with sorted results
+- [ ] Sort student list by Programme (`sort=programme_name&order=asc`) — should return 200 with sorted results
+- [ ] Sort student list by Home Campus (`sort=home_campus&order=asc`) — should return 200 with sorted results
+- [ ] Verify pagination totals are correct (no duplicate or missing records)
+- [ ] Verify sorting combined with filters returns correct filtered + sorted results
