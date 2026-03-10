@@ -1,29 +1,34 @@
 ## Why
 
-When sorting student or course table columns in the admin dashboard, certain sort fields trigger a MySQL 8 error (SQLSTATE 3065): "Expression #1 of ORDER BY clause is not in SELECT list, references column 'bidding.p2_.label' which is not in SELECT list; this is incompatible with DISTINCT". This causes a 500 Internal Server Error, which the frontend interprets as an empty result set, displaying "No records found!" — making it appear that filters/sorting broke the data.
+Multiple SQL errors occur when sorting admin dashboard tables:
 
-**Root cause**: `StudentRepository::queryPaginated()` uses `SELECT DISTINCT s` (Doctrine entity). When the `FilterableQueryProvider` applies an `ORDER BY` on a joined entity's column (e.g., `p.label` for Promotion, `c.label` for Campus, `prog.name` for Programme), MySQL 8's strict mode rejects it because the ORDER BY column isn't in the SELECT DISTINCT list.
+1. **Student list sorting (SQL 3065)**: Sorting student table columns by joined entity fields (Promotion, Programme, Campus) triggers MySQL 8 error SQLSTATE 3065 — "Expression #1 of ORDER BY clause is not in SELECT list … incompatible with DISTINCT". Root cause: `StudentRepository::queryPaginated()` uses `SELECT DISTINCT s`; when `FilterableQueryProvider` applies `ORDER BY` on a joined column (e.g., `p.label`), MySQL rejects it.
 
-Additionally, course and student table headers across different dashboard views use inconsistent naming (e.g., "Credit" vs "Credits", "Seat Available" vs "Seats Available", "Course" vs "Course Name").
+2. **Course list sorting (SQL 1055)**: The courses endpoint `GET /v2/api/courses?sort=credits&order=ASC` triggers MySQL error SQLSTATE 42000 / 1055 — "Expression #19 of SELECT list is not in GROUP BY clause and contains nonaggregated column … incompatible with sql_mode=only_full_group_by". Root cause: `ClassesRepository::searchQueryPaginated()` uses `GROUP BY cl.id, c.id, s.id, ct.id, cam.id, stat.id` in campaign group mode, but the Doctrine Paginator with `fetchJoinCollection: true` internally generates SQL that includes columns from LEFT JOINed entities (`classPromotions`, `promotion`, `promotionPeriods`) in the SELECT list, which are not covered by the GROUP BY.
+
+3. **Frontend inconsistencies**: Course and student table headers use inconsistent naming (e.g., "Credit" vs "Credits", "Seat Available" vs "Seats Available"), and student settings sort field mapping sends incorrect field names to the backend.
 
 ## What Changes
 
-- **Fix DISTINCT + ORDER BY conflict**: Modify `StudentRepository::queryPaginated()` to add joined entity sort columns to the SELECT clause, or replace DISTINCT with GROUP BY, so that MySQL 8 allows ORDER BY on joined columns.
-- **Fix frontend sort field mapping**: Ensure the `student-setting-table.tsx` `fieldMapping` values match what `StudentService::listStudents()` expects (e.g., `full_name` → should be `first_name`, `id` → should be `people_soft_id`, `program` → should be `programme_name`).
-- **Standardize table headers**: Normalize column labels across course and student tables in `bidding-admin` for consistency (e.g., always "Credits" not "Credit", always "Seats Available" not "Seat Available").
+- **Fix course list GROUP BY conflict**: In `ClassesRepository::searchQueryPaginated()`, when `campaignGroupMode` is true, set the Doctrine Paginator's `fetchJoinCollection` to `false` (since `GROUP BY cl.id` already deduplicates rows), preventing the Paginator from generating a wrapping subquery that includes non-grouped columns.
+- **Fix student list DISTINCT + ORDER BY conflict**: Modify `StudentRepository::queryPaginated()` to replace `SELECT DISTINCT` with `GROUP BY s.id`, so that MySQL allows ORDER BY on joined columns.
+- **Fix frontend sort field mapping**: Ensure `student-setting-table.tsx` `fieldMapping` values match what `StudentService::listStudents()` expects.
+- **Standardize table headers**: Normalize column labels across course and student tables in `bidding-admin`.
 
 ## Capabilities
 
 ### Modified Capabilities
+- `course-list-sorting`: Fix backend query in `ClassesRepository::searchQueryPaginated()` to support sorting courses by any field without triggering SQL error 1055 when in campaign group mode.
 - `student-list-sorting`: Fix backend query to support sorting by Promotion, Programme, and Home Campus columns without triggering SQL error 3065.
 - `student-list-headers`: Standardize student table column headers across all dashboard views.
 - `course-list-headers`: Standardize course table column headers across all dashboard views (Pre-Bidding, Bidding Round, Add-Drop, Settings).
 
 ## Impact
 
+- **`bidding-api/src/Repository/ClassesRepository.php`**: `searchQueryPaginated()` method — must fix Paginator `fetchJoinCollection` when `campaignGroupMode` is true to prevent GROUP BY / only_full_group_by conflict. The Paginator wrapping subquery includes columns from LEFT JOINed `cp`, `p`, `pp` tables that aren't in the campaign GROUP BY clause.
 - **`bidding-api/src/Repository/StudentRepository.php`**: `queryPaginated()` method — must fix DISTINCT + ORDER BY incompatibility for joined entity columns (`p.label`, `c.label`, `prog.name`).
-- **`bidding-admin/src/components/settings/student-setting-table.tsx`**: Fix `fieldMapping` to send correct backend sort field names. Fix inconsistent frontend-backend sort field mapping.
-- **`bidding-admin/src/app/(authenticated)/mba/settings/students/page.tsx`**: Fix `handleSort` to send sort as a simple string field matching what `StudentController` expects, not a `Sort` object with DQL paths like `s.lastName`.
+- **`bidding-admin/src/components/settings/student-setting-table.tsx`**: Fix `fieldMapping` to send correct backend sort field names.
+- **`bidding-admin/src/app/(authenticated)/mba/settings/students/page.tsx`**: Fix `handleSort` to send sort as a simple string field matching what `StudentController` expects.
 - **`bidding-admin/src/components/dashboard/process/add-drop/course-table.tsx`**: Standardize column labels.
 - **`bidding-admin/src/components/dashboard/process/bidding-round/course-table-bidding-round.tsx`**: Standardize column labels.
 - **`bidding-admin/src/components/settings/course-table-setting.tsx`**: Standardize column labels if needed.
