@@ -42,15 +42,55 @@
 - [x] 6.2 In `bidding-admin/src/components/dashboard/process/add-drop/course-table.tsx`, change column label `'Credit'` → `'Credits'` (line ~47) and `'Course'` → `'Course Name'` in the render column (line ~35 label).
 - [x] 6.3 In `bidding-admin/src/components/settings/course-table-setting.tsx`, change column label `'Course'` → `'Course Name'` (line ~150).
 
-## 7. Verification
+## 8. Add In-Memory Sorting for Computed Columns in CourseController (Backend)
 
-- [ ] 7.1 Test `GET /v2/api/courses?page=1&limit=10&sort=credits&order=ASC` — must return HTTP 200 with sorted courses, no SQL error 1055.
-- [ ] 7.2 Test `GET /v2/api/courses?page=1&limit=10&sort=name&order=ASC` — must return HTTP 200.
-- [ ] 7.3 Test `GET /v2/api/courses?page=1&limit=10&sort=type&order=DESC` — must return HTTP 200.
-- [ ] 7.4 Test `GET /v2/api/courses?page=1&limit=10&sort=course_class_section&order=ASC` — must return HTTP 200 with courses sorted by section.
-- [ ] 7.5 Test `GET /v2/api/courses?page=1&limit=10` — verify each item includes `class_id` field with an integer value.
-- [ ] 7.6 Test the student list API endpoint with sort params `sort=promotion_name&order=asc`, `sort=programme_name&order=asc`, `sort=home_campus&order=asc` to confirm HTTP 200 with sorted results.
-- [ ] 7.7 In the admin UI, navigate to Settings > Students and click each sortable column header to verify sorting works without "No records found!" errors.
-- [ ] 7.8 Verify that sorting combined with filters (e.g., filter by promotion + sort by home campus) returns correct filtered and sorted results.
-- [ ] 7.9 Verify course table headers display correctly in Bidding Round and Add-Drop dashboard views.
-- [ ] 7.10 Smoke test: navigate across all dashboard views that show student and course tables to confirm no regressions.
+- [x] 8.1 In `bidding-api/src/Controller/Api/Course/CourseController.php`, in `filterCourses()`, define a `$computedSortFields` array: `['seat', 'conflict', 'fallback', 'promotions']`. Add a boolean `$isComputedSort = $request->sort !== null && in_array($request->sort, $computedSortFields, true);`.
+- [x] 8.2 When `$isComputedSort` is true, override pagination to fetch all records: set `$limit` to `$maxNoPaginationLimit` (10000) and `$offset` to `0`. Do NOT pass `$sort` to `classService->getList()` (set `$sort = null` for the query, since sorting will happen in PHP).
+- [x] 8.3 After the existing `foreach` loop that builds `$response->items` (after line ~405), add the in-memory sort block:
+  - Use `usort($response->items, ...)` with a comparator that reads `$courseDto->{$request->sort}` for each item.
+  - Handle `null` values by pushing them to the end of the sorted list.
+  - For `promotions` (string field), use `strcasecmp()`. For numeric fields (`seat`, `conflict`, `fallback`), use spaceship operator (`<=>`).
+  - Respect `$request->order` (ASC/DESC).
+- [x] 8.4 After sorting, slice the array for the requested page:
+  - `$requestedPage = $request->page > 0 ? $request->page : 1;`
+  - `$requestedLimit = $request->limit > 0 ? $request->limit : 20;`
+  - `$requestedOffset = ($requestedPage - 1) * $requestedLimit;`
+  - `$totalRecords = count($response->items);`
+  - `$response->items = array_slice($response->items, $requestedOffset, $requestedLimit);`
+  - Rebuild `$response->pagination` with correct `totalRecords`, `currentPage`, and `totalPages`.
+- [x] 8.5 Ensure the non-computed sort path (existing SQL-level sort) is unaffected — wrap the computed sort logic in the `if ($isComputedSort)` block only.
+- [ ] 8.6 Test `GET /v2/api/courses?page=1&limit=10&sort=seat&order=ASC` — must return HTTP 200 with courses sorted by available seats ascending.
+- [ ] 8.7 Test `GET /v2/api/courses?page=1&limit=10&sort=conflict&order=DESC` — must return HTTP 200 with courses sorted by conflict count descending.
+- [ ] 8.8 Test `GET /v2/api/courses?page=2&limit=10&sort=seat&order=ASC` — verify page 2 returns items 10–19 from the sorted set with correct pagination metadata.
+
+## 9. Make seat/conflict/fallback/promotions Sortable in Frontend Course Table
+
+- [x] 9.1 In `bidding-admin/src/components/settings/course-table-setting.tsx`, update `SortField` type to include the 4 new fields: `type SortField = 'name' | 'credits' | 'type' | 'seat' | 'conflict' | 'fallback' | 'promotions';`
+- [x] 9.2 Add the 4 new fields to `fieldMapping`: `seat: 'seat'`, `conflict: 'conflict'`, `fallback: 'fallback'`, `promotions: 'promotions'`.
+- [x] 9.3 Add the 4 new fields to `backendSortableFields` array.
+- [x] 9.4 Update the Seats column `<th>` to be clickable with sort handler: add `cursor-pointer hover:bg-gray-200` classes, `onClick={() => handleSort('seat')}`, and sort icon via `getSortIcon('seat')`.
+- [x] 9.5 Update the Conflicts column `<th>` similarly with `onClick={() => handleSort('conflict')}` and sort icon.
+- [x] 9.6 Update the Fallbacks column `<th>` similarly with `onClick={() => handleSort('fallback')}` and sort icon.
+- [x] 9.7 Update the Promotions column `<th>` similarly with `onClick={() => handleSort('promotions')}` and sort icon.
+- [x] 9.8 Add sort cases in the `sortedCourses` `useMemo` switch statement for `seat`, `conflict`, `fallback` (numeric comparison) and `promotions` (string comparison, handle null).
+- [ ] 9.9 In the admin UI, navigate to Settings > Courses, click each of the 4 new sortable column headers and verify the sort icon toggles and data re-sorts correctly.
+
+## 10. Verification
+
+- [ ] 10.1 Test `GET /v2/api/courses?page=1&limit=10&sort=credits&order=ASC` — must return HTTP 200 with sorted courses, no SQL error 1055.
+- [ ] 10.2 Test `GET /v2/api/courses?page=1&limit=10&sort=name&order=ASC` — must return HTTP 200.
+- [ ] 10.3 Test `GET /v2/api/courses?page=1&limit=10&sort=type&order=DESC` — must return HTTP 200.
+- [ ] 10.4 Test `GET /v2/api/courses?page=1&limit=10&sort=course_class_section&order=ASC` — must return HTTP 200 with courses sorted by section.
+- [ ] 10.5 Test `GET /v2/api/courses?page=1&limit=10` — verify each item includes `class_id` field with an integer value.
+- [ ] 10.6 Test the student list API endpoint with sort params `sort=promotion_name&order=asc`, `sort=programme_name&order=asc`, `sort=home_campus&order=asc` to confirm HTTP 200 with sorted results.
+- [ ] 10.7 In the admin UI, navigate to Settings > Students and click each sortable column header to verify sorting works without "No records found!" errors.
+- [ ] 10.8 Verify that sorting combined with filters (e.g., filter by promotion + sort by home campus) returns correct filtered and sorted results.
+- [ ] 10.9 Verify course table headers display correctly in Bidding Round and Add-Drop dashboard views.
+- [ ] 10.10 Test `GET /v2/api/courses?page=1&limit=10&sort=seat&order=ASC` — verify courses are sorted by available seats ascending.
+- [ ] 10.11 Test `GET /v2/api/courses?page=1&limit=10&sort=seat&order=DESC` — verify courses are sorted by available seats descending.
+- [ ] 10.12 Test `GET /v2/api/courses?page=1&limit=10&sort=conflict&order=DESC` — verify courses are sorted by conflict count descending.
+- [ ] 10.13 Test `GET /v2/api/courses?page=1&limit=10&sort=promotions&order=ASC` — verify courses are sorted alphabetically by promotion labels.
+- [ ] 10.14 Test `GET /v2/api/courses?page=2&limit=10&sort=seat&order=ASC` — verify page 2 pagination is correct for computed sort.
+- [ ] 10.15 Test `GET /v2/api/courses?page=1&limit=10&sort=seat&order=DESC&min_credits=1` — verify computed sort works with filters.
+- [ ] 10.16 In the admin UI, navigate to Settings > Courses and click Seats, Conflicts, Fallbacks, Promotions column headers — verify sort icons toggle and data re-sorts.
+- [ ] 10.17 Smoke test: navigate across all dashboard views that show student and course tables to confirm no regressions.

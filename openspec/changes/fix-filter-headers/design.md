@@ -21,10 +21,11 @@ Additionally, frontend sort field names don't match backend expectations, and co
 - Standardize table column labels across course and student tables
 - Fix course sort field mapping so `course_class_section` and `type` sorting work
 - Add `class_id` to the course list response
+- Add sorting support for computed columns (`seat`, `conflict`, `fallback`, `promotions`) via in-memory sorting
 
 **Non-Goals:**
-- Changing the pagination or filter logic beyond what's needed to fix the SQL errors
-- Adding new sort fields or filter capabilities
+- Changing the pagination or filter logic beyond what's needed to fix the SQL errors and support computed-column sorting
+- Adding new filter capabilities beyond what already exists
 - Modifying API response DTOs beyond adding `class_id`
 
 ## Decisions
@@ -197,6 +198,100 @@ $courseDto->class_id = $class->getId();
 
 **Student tables — no changes needed** for core headers. The existing student-setting-table already uses consistent names. Contextual tables (simulation, enrollment) use different columns appropriate to their context and don't need standardization.
 
+### 8. Add In-Memory Sorting for Computed Columns (seat, conflict, fallback, promotions)
+
+**Problem**: The course list table has four columns that are computed in PHP after the SQL query returns results:
+- `seat` = `max(0, promotionSeats - enrolledCount - invitedCount - waitlistedCount)` — requires `BidService` calls per class
+- `conflict` = count of comma-separated IDs from `$class->getClassConflicts()`
+- `fallback` = hardcoded to `0`
+- `promotions` = comma-separated promotion labels from `ClassPromotions`
+
+These values are NOT database columns and cannot be sorted at the SQL/DQL level. The frontend `course-table-setting.tsx` currently marks only `name`, `credits`, and `type` as sortable — `seat`, `conflict`, `fallback`, and `promotions` columns have no sort capability.
+
+**Fix**: Implement a two-phase approach in `CourseController::filterCourses()`:
+
+1. **Detect computed-field sort**: Define a list of computed sort fields (`seat`, `conflict`, `fallback`, `promotions`). When `$request->sort` matches one of these, skip SQL-level sorting and fetch ALL records (override pagination to fetch everything).
+
+2. **Build DTOs, sort in PHP, then paginate**:
+   - Iterate over ALL classes from the query result (no SQL LIMIT/OFFSET when sorting by computed field)
+   - Compute `seat`, `conflict`, `fallback`, `promotions` for each `CourseDto` (same logic as existing loop)
+   - Sort the full `$response->items` array in PHP using `usort()` based on the requested field and direction
+   - Slice the sorted array for the requested page: `array_slice($items, $offset, $limit)`
+   - Build correct pagination metadata from the total count
+
+```php
+// In CourseController::filterCourses(), before building the query:
+$computedSortFields = ['seat', 'conflict', 'fallback', 'promotions'];
+$isComputedSort = $request->sort !== null && in_array($request->sort, $computedSortFields, true);
+
+// When $isComputedSort is true:
+// 1. Don't pass Sort to classService->getList() (no SQL ORDER BY)
+// 2. Use a large limit (10000) and offset 0 to fetch all records
+// 3. After building all DTOs, sort in PHP:
+if ($isComputedSort) {
+    usort($response->items, function (CourseDto $a, CourseDto $b) use ($request) {
+        $aVal = $a->{$request->sort};
+        $bVal = $b->{$request->sort};
+        // Handle null values (push to end)
+        if ($aVal === null && $bVal === null) return 0;
+        if ($aVal === null) return 1;
+        if ($bVal === null) return -1;
+        // For string fields (promotions), compare as strings
+        if (is_string($aVal)) {
+            $cmp = strcasecmp($aVal, $bVal);
+        } else {
+            $cmp = $aVal <=> $bVal;
+        }
+        return strtoupper($request->order ?? 'ASC') === 'DESC' ? -$cmp : $cmp;
+    });
+    // Slice for pagination
+    $totalRecords = count($response->items);
+    $page = $request->page > 0 ? $request->page : 1;
+    $limit = $request->limit > 0 ? $request->limit : 20;
+    $offset = ($page - 1) * $limit;
+    $response->items = array_slice($response->items, $offset, $limit);
+    $response->pagination = new Pagination(
+        totalRecords: $totalRecords,
+        currentPage: $page,
+        totalPages: (int) ceil($totalRecords / $limit),
+    );
+}
+```
+
+**Frontend changes** in `course-table-setting.tsx`:
+- Add `seat`, `conflict`, `fallback`, `promotions` to `SortField` type
+- Add them to `fieldMapping` and `backendSortableFields`
+- Add click handlers and sort icons to the Seats, Conflicts, Fallbacks, Promotions column headers
+- Add sort cases in `sortedCourses` for these fields (as fallback for client-side sort)
+
+```ts
+type SortField = 'name' | 'credits' | 'type' | 'seat' | 'conflict' | 'fallback' | 'promotions';
+
+const fieldMapping: Record<SortField, string> = {
+  name: 'name',
+  credits: 'credits',
+  type: 'type',
+  seat: 'seat',
+  conflict: 'conflict',
+  fallback: 'fallback',
+  promotions: 'promotions',
+};
+
+const backendSortableFields: SortField[] = ['name', 'credits', 'type', 'seat', 'conflict', 'fallback', 'promotions'];
+```
+
+**Why in-memory sorting is acceptable**:
+- The course list is admin-only, typically hundreds to low-thousands of records
+- The `no_pagination` flag already supports fetching all records (up to 10,000)
+- Computed fields depend on multiple service calls and JOINs that can't be expressed as simple DQL ORDER BY
+- Sorting by `fallback` (always 0) is technically a no-op but included for UI consistency
+
+**Alternative considered**: Adding SQL subqueries for `seat` and `conflict` computations. Rejected because:
+- `seat` requires counting bids by status (enrolled/invited/waitlisted) per class — complex correlated subquery
+- `conflict` is stored as a comma-separated string, requiring string manipulation in SQL
+- Both approaches would complicate the already-complex `searchQueryPaginated()` DQL query
+- In-memory sort is simpler, safer, and sufficient for the dataset size
+
 ## Risks / Trade-offs
 
 - **Risk: `fetchJoinCollection: false` causes incorrect pagination** → Mitigation: The `GROUP BY cl.id` already ensures one row per class, making the Paginator's subquery-based dedup unnecessary. The count is already overridden via `totalOverride`. Tested: the non-campaign mode path with `fetchJoinCollection: true` remains untouched.
@@ -205,3 +300,5 @@ $courseDto->class_id = $class->getId();
 - **Risk: Changing sort field names breaks existing saved state** → Mitigation: Sort state is ephemeral (in React state), not persisted. Users will simply get a fresh default sort on next page load.
 - **Risk: `cl.section` ORDER BY in campaign group mode** → Mitigation: `cl.section` is a column on the Class entity (root entity, alias `cl`), which is included in the GROUP BY clause. ORDER BY on grouped columns is always valid.
 - **Risk: Adding `class_id` breaks existing API consumers** → Mitigation: Additive field only. Existing consumers ignore unknown fields. No existing field is changed or removed.
+- **Risk: In-memory sorting fetches all records for computed-field sorts** → Mitigation: The course list is admin-only with typically hundreds to low-thousands of records. The existing `no_pagination` flag already supports fetching up to 10,000 records. The `maxNoPaginationLimit` (10,000) cap prevents unbounded memory usage. For normal-sized datasets this is negligible overhead.
+- **Risk: In-memory sort pagination metadata differs from SQL pagination** → Mitigation: The controller explicitly rebuilds `Pagination` after slicing, so `totalRecords`, `currentPage`, and `totalPages` remain accurate.

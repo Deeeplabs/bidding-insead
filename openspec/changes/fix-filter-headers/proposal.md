@@ -20,11 +20,12 @@ Multiple SQL errors occur when sorting admin dashboard tables:
 - **Standardize table headers**: Normalize column labels across course and student tables in `bidding-admin`.
 - **Fix course sort field mapping**: Add `course_class_section` → `cl.section` to the `$sortFieldMap` in `CourseController::filterCourses()`, and add `cl.section` and `ct.name` to `CourseListQueryValidator::sortConstraints()`.
 - **Add `class_id` to course list response**: Add a `class_id` property to `CourseDto`, populate it in `CourseController::filterCourses()`, and add it to the frontend `SingleCourse` type.
+- **Add sorting for computed columns (seat, conflict, fallback, promotions)**: These four columns are computed in PHP after the SQL query (seat = totalSeats - enrolled - invited - waitlisted; conflict = count of conflict IDs; fallback = hardcoded 0; promotions = comma-separated labels). Since they can't be sorted at SQL level, implement in-memory sorting in `CourseController::filterCourses()`: when sorting by a computed field, fetch all records without SQL-level pagination, compute all fields, sort the array in PHP, then slice for pagination. Update the frontend `course-table-setting.tsx` to make these 4 columns sortable with backend sort support.
 
 ## Capabilities
 
 ### Modified Capabilities
-- `course-list-sorting`: Fix backend query in `ClassesRepository::searchQueryPaginated()` to support sorting courses by any field without triggering SQL error 1055 when in campaign group mode. Add missing sort field mappings (`course_class_section` → `cl.section`) and update `CourseListQueryValidator` to allow all mapped sort fields. Add `class_id` to the course list response DTO.
+- `course-list-sorting`: Fix backend query in `ClassesRepository::searchQueryPaginated()` to support sorting courses by any field without triggering SQL error 1055 when in campaign group mode. Add missing sort field mappings (`course_class_section` → `cl.section`) and update `CourseListQueryValidator` to allow all mapped sort fields. Add `class_id` to the course list response DTO. Add in-memory sorting support for computed columns (`seat`, `conflict`, `fallback`, `promotions`) that cannot be sorted at SQL level.
 - `student-list-sorting`: Fix backend query to support sorting by Promotion, Programme, and Home Campus columns without triggering SQL error 3065.
 - `student-list-headers`: Standardize student table column headers across all dashboard views.
 - `course-list-headers`: Standardize course table column headers across all dashboard views (Pre-Bidding, Bidding Round, Add-Drop, Settings).
@@ -37,9 +38,11 @@ Multiple SQL errors occur when sorting admin dashboard tables:
 - **`bidding-admin/src/app/(authenticated)/mba/settings/students/page.tsx`**: Fix `handleSort` to send sort as a simple string field matching what `StudentController` expects.
 - **`bidding-admin/src/components/dashboard/process/add-drop/course-table.tsx`**: Standardize column labels.
 - **`bidding-admin/src/components/dashboard/process/bidding-round/course-table-bidding-round.tsx`**: Standardize column labels.
-- **`bidding-admin/src/components/settings/course-table-setting.tsx`**: Standardize column labels if needed.
+- **`bidding-admin/src/components/settings/course-table-setting.tsx`**: Standardize column labels if needed. Add `seat`, `conflict`, `fallback`, `promotions` as sortable columns with backend sort support.
 - **`bidding-api/src/Domain/Course/CourseListQueryValidator.php`**: `sortConstraints()` — must add `cl.section` and `ct.name` to allowed sort fields.
 - **`bidding-api/src/Domain/Course/CourseDto.php`**: Add `class_id` property.
 - **`bidding-admin/src/src/course/course-response.ts`**: Add `class_id` to `SingleCourse` type.
+- **`bidding-api/src/Controller/Api/Course/CourseController.php`**: `filterCourses()` method — add in-memory sorting logic for computed fields (`seat`, `conflict`, `fallback`, `promotions`). When sorting by a computed field, disable SQL-level pagination, compute all fields, sort in PHP, then slice for pagination.
 - No database schema changes, no migration required.
 - API response shape change: `class_id` field added to course list items (additive, non-breaking).
+- Sort behavior change: sorting by `seat`, `conflict`, `fallback`, `promotions` uses in-memory sorting (all records fetched, sorted in PHP, then paginated).

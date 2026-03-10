@@ -1,4 +1,4 @@
-# Fix Student List Sort Mapping & Standardize Table Headers
+# Fix Student List Sort Mapping & Standardize Table Headers + Course List Computed Column Sorting
 
 ## Problem
 
@@ -10,9 +10,11 @@
 
 4. **Inconsistent table headers**: Course tables used different labels across views — "Credit" vs "Credits", "Seat Available" vs "Seats Available", "Course" vs "Course Name".
 
+5. **Course list columns not sortable**: The Seats, Conflicts, Fallbacks, and Promotions columns in the course table (`course-table-setting.tsx`) were not clickable for sorting. Only Name, Credits, and Type had sort functionality.
+
 ## Solution
 
-Fixed the frontend sort field mapping, sort payload format, and standardized all course table column headers.
+Fixed the frontend sort field mapping, sort payload format, standardized all course table column headers, and added sorting support for Seats, Conflicts, Fallbacks, and Promotions columns.
 
 ### Changes Made
 
@@ -39,12 +41,17 @@ Fixed the frontend sort field mapping, sort payload format, and standardized all
 
 5. **`src/components/settings/course-table-setting.tsx`**
    - Changed "Course" → "Course Name"
+   - Added `seat`, `conflict`, `fallback`, `promotions` to `SortField` type union
+   - Added these 4 fields to `fieldMapping` and `backendSortableFields` arrays
+   - Made Seats, Conflicts, Fallbacks, Promotions column headers clickable with `cursor-pointer hover:bg-gray-200`, `onClick` sort handler, and sort direction icon (↑↓↕)
+   - Added sort cases in `sortedCourses` `useMemo` for client-side fallback sorting (numeric comparison for seat/conflict/fallback, string comparison for promotions)
 
 ## Impact
 
 - **No API changes**: Frontend-only fixes — sort params now correctly match backend expectations
 - **No breaking changes**: Sort state is ephemeral (React state), not persisted
 - **Consistent UX**: All course tables now use uniform column labels across dashboard views
+- **New sort columns**: Seats, Conflicts, Fallbacks, Promotions are now sortable in the Settings course table, sending `sort=seat|conflict|fallback|promotions` to the backend which handles in-memory sorting for these computed fields
 
 ## Verification
 
@@ -55,3 +62,8 @@ Fixed the frontend sort field mapping, sort payload format, and standardized all
 - [ ] Verify Bidding Round course table shows "Course Name", "Credits", "Seats Available"
 - [ ] Verify Add-Drop course table shows "Course Name", "Credits"
 - [ ] Verify Settings course table shows "Course Name"
+- [ ] Click Seats column header in Settings > Courses — sort icon toggles and data re-sorts by available seats
+- [ ] Click Conflicts column header — sort icon toggles and data re-sorts by conflict count
+- [ ] Click Fallbacks column header — sort icon toggles and data re-sorts
+- [ ] Click Promotions column header — sort icon toggles and data re-sorts alphabetically by promotion labels
+- [ ] Verify sort toggles cycle: ASC (↑) → DESC (↓) → clear (↕)
