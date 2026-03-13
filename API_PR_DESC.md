@@ -1,46 +1,34 @@
-# System Notifications for SIS Sync Failures
+# PM Credit Progress Fixes
 
-## Problems
+## Problem
+Currently, the student and PM dashboards do not accurately reflect the allocated credits and capital or what has been spent/fulfilled during bidding cycles when using the new PM campaign configurations. The calculations were relying on older legacy modes (e.g., specific session-based configurations) and ignoring the campaign rules set by the Program Manager for minimum credits and maximum capital. Additionally, the PM dashboard (`bidding-admin`) lacked parity with the backend `StudentCreditService`/`StudentCapitalService`, specifically missing the `credits_to_be_fulfilled` field in its DTOs, leading to discrepant progress visualization.
 
-### 1. Lack of Visibility for SIS Sync Failures
-Currently, when a synchronization mechanism with the SIS (PeopleSoft) fails for any student or course data, there is no in-app alert or notification notifying administrators. This lack of visibility can lead to data drift or synchronization inconsistencies going unnoticed by Business Partners and Program Managers, requiring late manual intervention or confusing student portals.
-
-**Root cause**: Webhooks handling SIS integrations do not trigger internal notifications upon error.
-
-## Solution
-
-### 1. Add SIS Sync Failure Notification
-Implement an immediate notification triggered upon a PeopleSoft (SIS) synchronization error. This ensures system anomalies are surfaced directly to Business Partners and Program Managers for immediate investigation.
+## Goal
+Ensure parity and accuracy between the actual PM campaign configurations and the metrics displayed on both the Student and PM Dashboards, explicitly updating "Credit Earned", "Credits to be fulfilled", "Capital Spent", and "Capital Left".
 
 ## Changes Made
 
-1. **`src/Repository/UserRepository.php`**
-   - Added `findBusinessPartnersAndProgramManagers()` method to accurately query for all users holding the `ROLE_BUSINESS_PARTNER` or `ROLE_PROGRAM_MANAGER` roles.
+1. **`src/Repository/BidRepository.php`**
+   - Added support for fetching total bidding credits by bounding to specific campaigns in `findTotalBiddingCreditsByStudent()` and `findTotalBiddingCreditsByStudents()`. This ensures that "Credit Earned" strictly sums the Final Enrollment Courses Credits and adjustments for the active bidding rounds designated by the PM.
 
-2. **Webhook Controllers**
-   - Modified the following controllers:
-     - `CreateCourseController`
-     - `CreateClassController`
-     - `CreateStudentController`
-     - `DeleteStudentController`
-     - `DeleteClassController`
-     - `EnrollmentController`
-   - Wrapped the main logic in `try-catch` blocks or modified existing error handling.
-   - Injected `NotificationService` and `UserRepository`.
-   - Triggered `NotificationService->createBulk(...)` using the pre-existing `SIS_SYNC_FAILED` notification type when integration faults are detected.
-   - The notification message is configured via the pre-existing `SIS_SYNC_FAILED` template ("Student or course data synchronization with the SIS has failed. Please investigate.").
+2. **`src/Domain/Student/StudentCreditService.php`**
+   - Updated `getStudentTotalCreditsTaken()`: It now queries for active PM campaigns via `getStudentEligibleCampaigns()`. If the student is part of an active campaign, it calculates the taken credits accurately using `BidRepository::findTotalBiddingCreditsByStudent()` tied to the active campaign IDs.
+   - Updated `getTotalCredits()`: It now similarly passes active `campaignIds` to accurately reflect the correct domain bounded sum of total available credits.
 
-3. **`src/Domain/Notification/NotificationService.php`**
-   - Removed the `final` keyword from the class declaration to allow it to be mocked in unit tests.
+3. **`src/Domain/Student/StudentCapitalService.php`**
+   - Updated `getStudentTotalSpentCapital()`: It now fetches active campaigns. If campaigns exist, the spent capital exclusively relies on `findTotalPointsByStudentAndCampaigns()` to prevent "double-counting" against legacy fallback calculations (`$spentFromPeriods` and `$spentFromExchanges`).
+   - Updated `getBatchCapital()`: Optimized the batching logic. While calculating initial capital, it detects if a student is under campaign mode and evaluates their spent capital utilizing `findTotalPointsByStudentAndCampaigns()` directly, skipping the legacy batch `bids` fallback array reduction to prevent redundancy and correct the metric.
+
+4. **`src/Domain/Student/StudentDto.php` & `src/Domain/Student/StudentListDto.php`**
+   - Introduced `credits_to_be_fulfilled` (`float`) property into both DTOs to guarantee real-time reflection of the configured PM goals to the `bidding-admin` frontend (PM dashboard).
+
+5. **`src/Domain/Student/Mapper/StudentToDtoMapper.php` & `src/Domain/Student/Mapper/StudentListToDtoMapper.php`**
+   - Updated logic to map the newly introduced `credits_to_be_fulfilled` property from `$this->studentCreditService->getTotalCreditGranted()`.
 
 ## Impact
+- Core Domain calculations accurately interpret PM configuration for minimum credits and capital grants dynamically instead of statically.
+- The `bidding-api` cleanly reflects `credits`, `credits_to_be_fulfilled`, `capital_left`, and `capital_spent` identically to PM dashboards and Student Dashboards natively.
 
-- **bidding-api**: Additions to Webhook failure handlers. Introduces a query for BP/PM users to dispatch notifications.
-- **bidding-admin**: BP/PM users will now begin receiving this notification natively within their Notification Centre. No UI code changes are strictly necessary aside from relying on existing display behavior.
-- **Backward compatible**: Will not conflict with existing notifications. Non-disruptive to data handling. Resolves a critical "silent failure" state.
-
-## Verification
-
-- [x] `bidding-api/tests/Unit/Controller/Api/Webhook/Course/Create/CreateCourseControllerTest.php` — Created a PHPUnit test to trigger an intentional SIS sync failure by throwing an exception in the mock `CourseService`, verifying that `NotificationService->createBulk` receives the `SIS_SYNC_FAILED` code and the resolved array of BP/PM users.
-- [x] Manual triggered failure via Postman/cURL correctly fires database `Notification` insertion.
-- [x] Visual verification inside `bidding-admin` Notification Centre shows the alert to an active PM/BP assigned user.
+## Testing / Verification Steps
+- PM Dashboard dynamically displays accurate `credits_to_be_fulfilled` and balances matching the student stats.
+- Capital spent accurately captures real-time bidding without double counting periods overlaying PM cycles.
