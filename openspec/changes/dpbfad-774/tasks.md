@@ -13,6 +13,7 @@
 ## 3. Response DTO
 
 - [x] 3.1 Add `public int $promotions` property to `ProgrammeGovernanceOverview` class in `bidding-api/src/Controller/Api/Dashboard/DashboardStatsResponse.php`
+- [x] 3.2 Pass `promotions` from stats array to `ProgrammeGovernanceOverview` constructor in `DashboardController::getBPDashboardStats()` — this was the missing wiring that caused the entire endpoint to crash with a TypeError, resulting in all dashboard values showing 0
 
 ## 4. Frontend Update
 

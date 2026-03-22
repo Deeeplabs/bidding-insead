@@ -3,9 +3,10 @@
 ## Problem
 The `GET /dashboard/bp/stats` endpoint returns incorrect statistics for the Business Partner Dashboard:
 
-1. **Promotion count missing** — The `programme_governance_overview` response has no `promotions` field. The frontend uses `programme_operations` (Tier 2 ProgramManager count) as a proxy, which returns the wrong number (e.g. **1** instead of the actual **5+** active promotions for a programme).
-2. **`total_users` inflated** — Calculated via `COUNT(*)` on all non-deleted User rows (e.g. **8,227**), while per-role counts use the `user_role` join table. Users with zero or multiple roles cause total ≠ sum of categories (7 + 8 + 2 + 8,217 = **8,234 ≠ 8,227**).
-3. **`students` count misaligned** — Counts User entities with `ROLE_STUDENT` regardless of status (e.g. **8,217**), while the Students tab filters `Student` entities by `StudentStatus::ACTIVE` AND `PromotionStatus::ACTIVE`, producing a lower count.
+1. **Endpoint crash (all stats show 0)** — The `ProgrammeGovernanceOverview` DTO requires 4 constructor arguments but `DashboardController::getBPDashboardStats()` only passes 3, omitting `promotions`. This causes a PHP `TypeError` at runtime, crashing the entire endpoint and returning an error response — the frontend falls back to displaying **0 for all values**.
+2. **Promotion count missing** — The `programme_governance_overview` response had no `promotions` field. The frontend used `programme_operations` (Tier 2 ProgramManager count) as a proxy, which returns the wrong number (e.g. **1** instead of the actual **5+** active promotions for a programme).
+3. **`total_users` inflated** — Calculated via `COUNT(*)` on all non-deleted User rows (e.g. **8,227**), while per-role counts use the `user_role` join table. Users with zero or multiple roles cause total ≠ sum of categories (7 + 8 + 2 + 8,217 = **8,234 ≠ 8,227**).
+4. **`students` count misaligned** — Counts User entities with `ROLE_STUDENT` regardless of status (e.g. **8,217**), while the Students tab filters `Student` entities by `StudentStatus::ACTIVE` AND `PromotionStatus::ACTIVE`, producing a lower count.
 
 ## Goal
 Fix the `GET /dashboard/bp/stats` response so that:
@@ -30,7 +31,10 @@ Fix the `GET /dashboard/bp/stats` response so that:
 4. **`src/Controller/Api/Dashboard/DashboardStatsResponse.php`**
    - Added `public int $promotions` property to `ProgrammeGovernanceOverview` DTO class.
 
-5. **`tests/Unit/Domain/Dashboard/DashboardStatsServiceTest.php`** *(new)*
+5. **`src/Controller/Api/Dashboard/DashboardController.php`**
+   - Added `promotions: $stats['programme_governance_overview']['promotions']` to the `ProgrammeGovernanceOverview` constructor call in `getBPDashboardStats()`. This was the missing wiring that caused the entire endpoint to crash with a `TypeError`, resulting in all dashboard values showing 0.
+
+6. **`tests/Unit/Domain/Dashboard/DashboardStatsServiceTest.php`** *(new)*
    - Verifies `promotions` returns the active promotion count from `PromotionRepository`.
    - Verifies `total_users` equals the sum of the four role counts.
    - Verifies `students` uses `StudentRepository::countActiveStudents()`.
