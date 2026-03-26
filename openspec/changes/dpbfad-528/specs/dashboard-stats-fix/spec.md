@@ -14,16 +14,24 @@ The Credit Progress metric SHALL use the credit range (`min_credits_per_student`
 - **THEN** the Credit Progress metric SHALL use 2.0–6.0 from the bidding round config
 
 ### Requirement: Credit Progress aggregates across all active campaigns' Final Enrollment rounds
-The total student count (denominator) for Credit Progress SHALL be the sum of eligible students across all Final Enrollment rounds of all active campaigns. The on-track count (numerator) SHALL be the count of those students whose enrolled credits fall within the applicable credit range.
+The total student count (denominator) for Credit Progress SHALL be the sum of eligible students across all Final Enrollment rounds of all active campaigns, regardless of whether those modules have any enrolled bids yet. The on-track count (numerator) SHALL be the count of those students whose enrolled credits fall within the applicable credit range.
 
 #### Scenario: Multiple campaigns with Final Enrollment
 - **WHEN** there are 3 active campaigns, each with 1 Final Enrollment round and 9 eligible students
 - **THEN** Credit Progress total SHALL be 27
 - **AND** the label SHALL read "{percentage}% students are on track (Totals across all active campaigns' Final Enrollment)"
 
+#### Scenario: Final Enrollment module with no enrollments yet
+- **WHEN** a Final Enrollment module exists but no students have enrolled bids
+- **THEN** the eligible students for that FE module SHALL still be counted in the total
+- **AND** on-track count for those students SHALL be 0
+
 #### Scenario: No active campaigns with Final Enrollment
 - **WHEN** no active campaigns have a Final Enrollment module
 - **THEN** Credit Progress SHALL show 0 / 0 with 0% and the standard label text
+
+### Requirement: Credit Progress uses consistent config format for eligibility
+The config passed to the student eligibility service SHALL be in the same flattened format as used by `collectBiddingPhases()`: `moduleConfig['config']` merged with `student_selection`. This ensures student filters and selection criteria are correctly applied when counting eligible students.
 
 ### Requirement: Bidding Status Overview aggregates across all Pre-Bidding and Bidding rounds
 The total student count (denominator) for Bidding Status Overview SHALL be the sum of eligible students across all Pre-Bidding and Bidding rounds of all active campaigns. A student counted in multiple rounds contributes to the total once per round.
