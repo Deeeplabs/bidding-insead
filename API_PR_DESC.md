@@ -1,33 +1,41 @@
-# Fix: Student Capital Adjustment
+# Fix: Dashboard Inaccurate Stats (Header) — Credit Progress Calculation
 
 ## Problem
-Jira: https://insead.atlassian.net/browse/DPBFAD-864
+Jira: https://insead.atlassian.net/browse/DPBFAD-528
 
-Admins were unable to remove capital or credits from students in the "Settings: Student List" if the denormalized `StudentData::remainingCapital` or `StudentData::creditTaken` fields were out of sync with the actual calculated balance. This occurred because `AdjustmentRequestToEntityMapper` performed strict safety checks against these denormalized fields, which could be lower than the student's actual "spare" capital (calculated from total grants + adjustments - spent points). This led to valid "Remove" operations being blocked despite "spare" capital being visible on the dashboard.
+The PM/PO dashboard header metric **Credit Progress** was using the **bidding round** module's phase config (`min_credits_per_student` / `max_credits_per_student`) to determine whether students are "on track" during Final Enrollment. However, Final Enrollment modules can define their **own** credit boundaries in their phase config, which may differ from the bidding round's config. This caused incorrect "on track" percentages when the Final Enrollment credit range was narrower or wider than the bidding round's range.
 
 ## Goal
-- Decouple adjustment validation from denormalized `StudentData` fields.
-- Use `StudentCapitalService` and `StudentCreditService` as the source of truth for validation.
-- Automatically synchronize `StudentData` denormalized fields during every manual adjustment.
+- Read credit boundaries from the **Final Enrollment module's own phase config** first.
+- Fall back to the bidding round config only when the Final Enrollment config does not define credit boundaries.
+- Ensure Bidding Status Overview and Credit Progress aggregation across all active campaigns is correct.
 
 ## Changes Made
 
-### 1. `bidding-api/src/Domain/Adjustment/Mapper/AdjustmentRequestToEntityMapper.php`
-- Injected `StudentCapitalService` and `StudentCreditService` into the mapper.
-- Refactored the `populate` method to fetch the "true" capital left and credits earned using the injected services.
-- Updated validation logic for "Remove" actions to use these true balances instead of denormalized fields.
-- Updated the mapping logic to automatically update `StudentData::setRemainingCapital()` and `StudentData::setCreditTaken()` with the newly calculated totals (true balance +/- adjustment amount) after every adjustment.
-- Ensured `StudentDataRepository::add()` is called to persist the synchronized state.
+### 1. `bidding-api/src/Domain/Dashboard/PMDashboardStatsService.php`
+- Updated `getCreditProgress()` to extract `$feConfig` from the Final Enrollment execution's own phase configs before looking at the bidding round config.
+- Credit range resolution now follows a two-step priority:
+  1. **Final Enrollment phase config** — if `min_credits_per_student` / `max_credits_per_student` are defined, use them.
+  2. **Bidding round phase config** (fallback) — only used when the FE config does not define one or both boundaries.
+- No changes to `getBiddingStatus()` — verified that `CampaignStatsBatchService::collectBiddingPhases()` already correctly collects both `pre_bidding` and `bidding_round` modules.
+- No changes to label text — verified all labels are consistent with the spec format.
+
+### 2. `bidding-api/tests/Unit/Domain/Dashboard/PMDashboardStatsServiceTest.php` *(new)*
+- Added unit tests covering:
+  - **Credit Progress with FE config** — FE's own credit range takes priority over bidding round config.
+  - **Credit Progress fallback** — falls back to bidding round config when FE has no credit boundaries.
+  - **Credit Progress with no Final Enrollment** — returns 0/0 when no active campaigns have FE modules.
+  - **Credit Progress multi-campaign aggregation** — totals are summed across all active campaigns.
+  - **Bidding Status aggregation** — verifies correct aggregation across multiple Pre-Bidding and Bidding rounds.
 
 ## Impact
-- **No migrations required** — Fixes behavior of existing logic and ensures data consistency through synchronization.
-- **Improved Data Integrity** — Manual adjustments now act as a "Sync" mechanism for `StudentData` fields, resolving stale metadata issues.
-- **Improved Admin UX** — Prevents valid capital removal operations from being blocked due to out-of-sync local data.
+- **No migrations required** — logic-only fix in an existing service method.
+- **No API response shape changes** — existing DTO fields (`on_track`, `total`, `percentage`, `label`) remain unchanged.
+- **No frontend changes** — backend labels already include aggregation scope text.
+- **Affected roles**: Programme Manager, Programme Operations (both use `GET /v2/api/dashboard/pm/stats`).
 
 ## Testing / Verification Steps
-1. Navigate to **"Settings: Student List"** in the Admin Dashboard.
-2. Identify a student with "Spare" capital but whose `remainingCapital` field is potentially out of sync (e.g., lower than the amount to remove).
-3. Attempt to **"Remove"** capital. Verify the operation succeeds.
-4. Verify that the student's `remainingCapital` field is correctly synchronized with the new calculated balance in the database.
-5. Attempt to **"Remove"** more capital than the spare amount; verify it is correctly blocked with the error message: *"Cannot reduce more than the balance, cannot be negative."*
-6. Repeat for **"Credits"** to verify parity.
+1. Log in as a **Programme Manager**. Check the dashboard header **Credit Progress** metric — verify the "on track" percentage reflects the Final Enrollment module's credit range (not the bidding round's).
+2. Log in as a **Programme Manager**. Check the **Bidding Status Overview** — verify the total counts aggregate across all Pre-Bidding and Bidding rounds of all active campaigns.
+3. Log in as a **Programme Operations** user. Verify the same metrics are displayed (PO shares the PM API endpoint).
+4. Run unit tests: `php bin/phpunit tests/Unit/Domain/Dashboard/PMDashboardStatsServiceTest.php`
