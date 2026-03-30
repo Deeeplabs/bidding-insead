@@ -1,41 +1,37 @@
 ## Context
 
-The bidding system allows admins to configure a campaign's bidding round with minimum and maximum capital (total bid points) per student. The UI field "Minimum total bid points (capital) required per student for the entire bidding cycle" maps to config key `min_capital_per_student`, and the maximum maps to `max_capital_per_student`.
+The QA raised DPBFAD-811 stating that "Generate Bid Data" produces bids with value less than 200 (the configured min_capital_per_student). Analysis revealed several underlying flaws in the `DummyDataService.php` and `BidValidator.php` logic:
 
-Two bugs exist:
-
-1. **BidValidator.validateCapital()** checks `$config['min_bids_entire_round']` for minimum capital instead of `$config['min_capital_per_student']`. Since the admin UI writes to `min_capital_per_student`, the minimum check silently passes when `min_bids_entire_round` is null — meaning students can submit bids with total points below the configured minimum.
-
-2. **DummyDataService.preparedDummyBidsForCampaign()** generates random bid points starting at 1 with `mt_rand(1, ...)`. The loop-end minimum adjustment only fires when the iterator hits `array_key_last($cp)`, but the loop frequently breaks early (due to capital/credit limits), so the adjustment never fires. Additionally, it calls `persistDummyBidsWithoutValidation()`, bypassing all guards.
+1. **Incorrect Config Fallback**: `BidValidator` and `DummyDataService` were falling back to `min_bids_entire_round` (a count) if `min_capital_per_student` (a points sum) was not present or evaluated to 0. This incorrectly forced a capital minimum to match a section count minimum (e.g., 5).
+2. **Confusing Shortfall Distribution**: DummyDataService tried to enforce the minimum capital, but dumped the entire shortfall onto the very last bid generated. This left the other bids at very low random numbers (e.g., 2 or 4). QA looking at PM dashboards for specific courses saw these tiny bids and assumed the 200 capital constraint was violated entirely.
+3. **Draft Mutation Bug**: If a student's generated courses didn't meet the minimum credits limit, the dummy generator correctly set their bids to `'draft'`. But it mutated the outer loop's `$bidStatus` variable, meaning *every subsequent student* was permanently set to draft bids.
+4. **Duplicate Classes**: The ClassPromotions query fetched multiple sections for the same course, and the dummy loop didn't de-duplicate by `CourseId`, allowing a student to bid on the same course multiple times.
 
 ## Goals / Non-Goals
 
 **Goals:**
-- Ensure `BidValidator.validateCapital()` correctly reads `min_capital_per_student` for the minimum total capital check (with fallback to `min_bids_entire_round` for backward compatibility)
-- Ensure `DummyDataService.preparedDummyBidsForCampaign()` generates total bid points within the configured `min_capital_per_student` / `max_capital_per_student` range
+- Remove the illogical fallback to `min_bids_entire_round` for capital limits across the API.
+- Fix DummyDataService `$bidStatus` scope mutation so student statuses are assessed independently.
+- De-duplicate DummyDataService course assignments by `Course->getId()`.
+- Distribute capital shortfall smoothly across all generated bids so the dummy data looks realistic to QA.
 
 **Non-Goals:**
-- Changing the admin UI or config DTO structure
-- Adding per-course bid point minimums (currently disabled and out of scope)
-- Modifying the real bid submission endpoint contract or response shape
-- Changing entity or database schema
+- Changing the admin UI or config DTO structure.
+- Modifying the real bid submission endpoint contract.
+- Changing entity or database schema.
 
 ## Decisions
 
-**Decision 1: Fix config key in BidValidator.validateCapital()**
+**Decision 1: Eliminate fallback from capital to bids**
+Remove `?? $config['min_bids_entire_round']` from capital resolution anywhere it appears. Capital (points) and Bids (count) are fundamentally different concepts and combining them under a fallback masks configuration omissions and lowers validation requirements improperly.
 
-Use `$config['min_capital_per_student'] ?? $config['min_bids_entire_round'] ?? null` for the minimum capital check. This mirrors the max capital check which already uses `$config['max_capital_per_student']`. The fallback to `min_bids_entire_round` preserves backward compatibility for any campaign configs that use that key.
+**Decision 2: Smooth Shortfall Distribution**
+Instead of `$lastBid->bidPoints += $shortfall;`, implement a `while` loop that adds `mt_rand(1, min(50, $shortfall))` to each generated bid sequentially until the shortfall reaches 0. This creates realistic dummy bids (e.g., 40, 50, 60, 50) rather than standard deviation breaks (e.g., 2, 2, 2, 194).
 
-*Alternative considered*: Only use `min_capital_per_student` without fallback — rejected because some historical campaign configs might only have `min_bids_entire_round`.
-
-**Decision 2: Fix DummyDataService minimum enforcement by applying adjustment after the loop**
-
-Move the minimum capital adjustment out of the per-item loop body and apply it after the loop ends, on the last bid actually placed (not the last element in the array). If the cumulative bid points are below `min_capital_per_student` after generating all bids, add the difference to the last bid item. Also use `max_capital_per_student` (with fallback to `max_bids_entire_round`) as the cap for random generation to handle cases where `max_bids_entire_round` is 0 but `max_capital_per_student` is set.
-
-*Alternative considered*: Run BidValidator on dummy data too — rejected because `persistDummyBidsWithoutValidation` intentionally skips validators for other rules (deadline, seat availability, etc.) that don't apply to test data. The fix should be in the generation logic itself.
+**Decision 3: Deduplicate Course IDs**
+Maintain a `$selectedCourseIds` array locally in the student iteration of `DummyDataService`, skipping any class whose `courseId` is already present. This fixes the multiple-sections-per-course bug in dummy generation.
 
 ## Risks / Trade-offs
 
-- **[Risk] Existing campaigns with `min_bids_entire_round` set but `min_capital_per_student` null** → Mitigated by fallback chain: `min_capital_per_student ?? min_bids_entire_round`
-- **[Risk] Dummy data total might slightly exceed `max_capital_per_student` after minimum adjustment** → Mitigated by capping the adjusted value at `max_capital_per_student`
-- **[Risk] Stricter validation may reject bids that previously went through** → This is intentional and correct behavior; bids violating configured minimums should be rejected
+- **[Risk] Stricter validation may reject bids that previously went through** -> This is intentional; falling back to a bid count when capital is intended effectively disabled capital bounds checks.
+- **[Risk] Dummy generation takes slightly more CPU ops** -> Smoothed distribution requires an extra `while` loop over an array of size ~5-10, negligible performance impact.
