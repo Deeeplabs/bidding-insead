@@ -1,64 +1,37 @@
-# Pre-Bidding Programme-Based Access Control
+# Fix: Bid Points Capital Validation
 
 ## Problem
-Students can access pre-bidding URLs for campaigns belonging to a different Programme/Promotion by copying and pasting the URL directly. The system only validates programme access during UI navigation but not on direct URL access, allowing unauthorized users to view campaign details.
+Jira: https://insead.atlassian.net/browse/DPBFAD-811
+
+The "Generate Bid Data" function produces bids with total bid points far below the configured minimum capital per student. In a campaign configured with min=200 / max=1000 capital, a student received only 6 total bid points. Two root causes were identified:
+
+1. **`BidValidator.validateCapital()` uses the wrong config key** — it reads `min_bids_entire_round` for the minimum capital check instead of `min_capital_per_student`, which is the key the admin UI writes to. This means the minimum capital validation is silently skipped for real student bid submissions when only `min_capital_per_student` is configured.
+
+2. **`DummyDataService.preparedDummyBidsForCampaign()` has unreliable minimum enforcement** — bid points are generated with `mt_rand(1, ...)` (no minimum floor), and the last-item minimum adjustment only fires when the loop reaches `array_key_last($cp)`. Since the loop breaks early due to capital/credit limits, the adjustment never fires for most students. Additionally, `persistDummyBidsWithoutValidation()` bypasses all guards.
 
 ## Goal
-Implement programme and promotion validation on every pre-bidding page access:
-- Validate that the student's Programme and Promotion match the campaign's Programme and Promotion
-- Redirect unauthorized users to Access Denied page
-- Ensure no campaign data is exposed before authorization check
+Ensure bid submissions (both real student bids and admin-generated dummy data) respect the configured `min_capital_per_student` and `max_capital_per_student` constraints from the PM campaign bidding round configuration.
 
 ## Changes Made (bidding-api)
 
-### 1. `src/Controller/Api/Student/Campaign/StudentActiveCampaignController.php`
-- Added Programme/Promotion authorization check in the `getBiddingRoundDetail` method (line ~185)
-- Fetches the campaign and compares student's Promotion and Program against campaign's Promotion and Program
-- Returns 403 Forbidden if user's Promotion doesn't match Campaign's Promotion
-- Returns 403 Forbidden if user's Program doesn't match Campaign's Program
-- Handles edge case where Campaign has no Programme assigned (allow access for backward compatibility)
+1. **`src/Domain/Campaign/ActiveCampaign/Validator/BidValidator.php`**
+   - Fixed `validateCapital()`: now reads `min_capital_per_student` with fallback to `min_bids_entire_round` for the minimum total capital check, consistent with how the max check already uses `max_capital_per_student`. This ensures real student bid submissions are properly validated against the configured minimum.
 
-### Authorization Logic
-```php
-// Check if student's promotion matches campaign's promotion
-if ($campaignPromotion !== null && $studentPromotion !== null) {
-    if ($campaignPromotion->getId() !== $studentPromotion->getId()) {
-        return new JsonResponse([
-            'error' => 'Access denied: You do not have permission to view this campaign'
-        ], Response::HTTP_FORBIDDEN);
-    }
-}
+2. **`src/Service/DummyDataService.php`**
+   - Introduced `$effectiveMaxCapital` and `$effectiveMinCapital` resolved from `max_capital_per_student ?: max_bids_entire_round` and `min_capital_per_student ?: min_bids_entire_round` respectively. All loop logic now uses these effective values.
+   - Replaced the unreliable in-loop `$isLastItem` minimum enforcement with a post-loop adjustment: after all bids are generated, if total points are below `$effectiveMinCapital`, the shortfall is added to the last placed bid (capped at `$effectiveMaxCapital`).
+   - The credit minimum check is also moved out of the per-item loop body for clarity.
 
-// Check if student's program matches campaign's program
-if ($campaignProgram !== null && $studentProgram !== null) {
-    if ($campaignProgram->getId() !== $studentProgram->getId()) {
-        return new JsonResponse([
-            'error' => 'Access denied: You do not have permission to view this campaign'
-        ], Response::HTTP_FORBIDDEN);
-    }
-}
-```
-
-## API Response Change
-
-For unauthorized access:
-```json
-HTTP 403 Forbidden
-{
-  "error": "Access denied: You do not have permission to view this campaign"
-}
-```
-
-This is an **additive, non-breaking change** - only adds authorization checks to existing endpoints.
+3. **`tests/Unit/Domain/Campaign/ActiveCampaign/Validator/BidValidatorCapitalTest.php`** (new)
+   - 6 test cases covering: rejection below `min_capital_per_student`, acceptance at/above minimum, fallback to `min_bids_entire_round`, no validation when both keys are null, draft bypass, and max capital rejection.
 
 ## Impact
-- No migrations required — authorization logic only
-- No breaking changes — authorized users unaffected
-- Unauthorized users will be redirected to Access Denied page when accessing campaigns outside their Programme/Promotion
-- No campaign data exposed in 403 response
+- Bid validation now correctly enforces the admin-configured minimum capital (`min_capital_per_student`) for real student bid submissions.
+- Generated dummy bid data will always have total bid points within the configured min/max capital range.
+- No database migration, entity changes, or API response shape changes.
+- No frontend changes required.
 
 ## Testing / Verification Steps
-1. As a student with Programme "EMBA", navigate to an MBA campaign pre-bidding URL - should redirect to Access Denied
-2. As a student with matching Programme/Promotion, access pre-bidding URL - should succeed
-3. API request to `/api/student/active-campaigns/{id}` for unauthorized campaign - should return 403
-4. Verify no campaign data in unauthorized response
+- 6 PHPUnit tests pass for `BidValidatorCapitalTest`.
+- Manual: Create a campaign with `min_capital_per_student`=200, `max_capital_per_student`=1000, run Generate Bid Data, verify all students have total bid points between 200 and 1000.
+- Manual: Submit student bids with total points below the configured minimum, verify rejection error.
