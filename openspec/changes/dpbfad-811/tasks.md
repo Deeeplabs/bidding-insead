@@ -9,7 +9,11 @@
 - [x] 2.3 Introduce tracking array `$selectedCourseIds` to skip multiple classes assigned to the same Course ID.
 - [x] 2.4 Replace the `lastBid` point dump with a proportional distribution `while` loop to spread capital shortfall across all generated bids.
 
-## 3. Verification
+## 3. Fix DummyDataService Validation Function
 
-- [x] 3.1 Verify that running `Generate Bid Data` yields more realistic dummy distributions that sum reliably to >= 200 without throwing 198-point outliers.
-- [x] 3.2 Verify that the `BidValidator` rejects under-funded bid submissions strictly on `min_capital_per_student` without defaulting to bid counts.
+- [x] 3.1 In `validateCapitalDummyData()` method, replace `min_bids_entire_round` with `min_capital_per_student` for capital validation.
+
+## 4. Verification
+
+- [x] 4.1 Verify that running `Generate Bid Data` yields more realistic dummy distributions that sum reliably to >= 200 without throwing 198-point outliers.
+- [x] 4.2 Verify that the `BidValidator` rejects under-funded bid submissions strictly on `min_capital_per_student` without defaulting to bid counts.
