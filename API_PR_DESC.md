@@ -1,33 +1,61 @@
-# Fix: Switch — Enable Direct Navigation from Notification Popup to Relevant Page
+# Duplicate Course Verification & Enrollment Capital Null Safety in Add/Drop
 
-## Problem
-Jira: https://insead.atlassian.net/browse/DPBFAD-925
+## Summary
+Jira: https://insead.atlassian.net/browse/DPBFAD-792
 
-Programme Managers receive in-app notifications when a student submits or cancels a flex switch request, but the notifications were view-only — there was no link or button to navigate directly to the approval request page. PMs had to manually navigate to `/flex-switch/approval-request` after reading each notification.
+This PR addresses critical validation gaps and runtime crash risks in the Add/Drop & Waitlist phase:
+1. Prevents `Call to a member function getRemainingCapital() on null` errors when a `StudentData` record is missing.
+2. Enforces mandatory resolution of pre-existing duplicate course enrollments stemming from parallel bidding rounds.
+3. Enables strict capital (bid points) validation which was previously bypassed, blocking negative capital submissions.
+4. Aligns and documents existing duplicate-course validation guardrails (cross-module and same-request duplicates) with robust test coverage.
 
-**Root cause:** The `NotificationTemplateResolver::render()` method uses a strict null comparison (`=== null`) in its fallback guard for `actionUrl` and `actionLabel`. When the `CUSTOM_ANNOUNCEMENT` template's `actionLabel` column in the database is an empty string (`''`) rather than `NULL` (e.g. a PM edited the template via the admin UI and cleared the field), the fallback to `$data['action_label']` is skipped — the empty string passes the `=== null` check and the `str_contains('{{')` check, so it propagates to the notification unchanged. The frontend treats `''` as falsy, so no action button is rendered.
+## Problem Context
 
-The `$data` array in `FlexSwitchService::submitRequest()` and `cancelRequest()` already included `'action_url'` and `'action_label'` values (added in a prior iteration), but they were never reaching the stored notification due to this resolver bug.
+### 1. Null-Dereference on Missing StudentData
+During processing (including summary calculations and audit logging), the API directly dereferenced `Student::getStudentData()` without null checks. For students with missing data, this caused fatal runtime errors blocking Add/Drop submission.
 
-On the frontend, `notification-item.tsx` already conditionally renders a navigation button when `action_url` is present — no frontend changes were needed.
+### 2. Unresolved Parallel Bidding Duplicates
+In parallel bidding campaigns (multiple modules), students can legitimately end up with duplicate ENROLLED bids for the same course. However, there was no validation forcing them to drop one before performing Add/Drop manipulations.
 
-## Changes Made
+### 3. Capital (Bid Points) Check Disabled
+`AddDropValidator::validateBidPoints()` had correct logic but was never called in `AddDropService::submitAddDrop()`. This loophole allowed submissions resulting in negative bid point balances.
 
-**`src/Domain/Notification/NotificationTemplateResolver.php`**
+## What Changed
 
-- `render()` — changed the `actionUrl` fallback guard from `$actionUrl === null` to `empty($actionUrl)` so that both `null` and `''` trigger the `$data['action_url']` fallback
-- `render()` — changed the `actionLabel` fallback guard from `$actionLabel === null` to `empty($actionLabel)` so that both `null` and `''` trigger the `$data['action_label']` fallback
+1. **Null-safe financial snapshot in `AddDropService`**
+   - Added `getStudentFinancialSnapshot(Student $student)` which provides safe defaults (`credits_taken = 0.0`, `remaining_capital = 0`).
+   - Applied in `buildResponse()` for `bid_points_remaining` calculation and `createAuditLog()` for `oldData`.
+   - Updated `AddDropValidator::validateBidPoints()` to read remaining capital safely via `$student->getStudentData()?->getRemainingCapital() ?? 0`.
 
-**`src/Service/FlexSwitch/FlexSwitchService.php`** (no change — already in place)
+2. **Unresolved Duplicate Prevention in `AddDropValidator` & `BidRepository`**
+   - Added `BidRepository::findDuplicateEnrolledCoursesByStudentAndCampaign()` to query same-campaign duplicate entries.
+   - Added `AddDropValidator::validateNoUnresolvedDuplicateEnrollments()` which mandates dropping all-but-one class per duplicated course.
+   - Wired this validation symmetrically as step 4a in `submitAddDrop()` (runs unconditionally).
 
-- `submitRequest()` — PM `createBulk()` call already includes `'action_url' => '/flex-switch/approval-request'` and `'action_label' => 'View Requests'` in `$data`
-- `cancelRequest()` — same data already present in the PM `createBulk()` call
+3. **Capital Check Enablement**
+   - Uncommented/enabled `validateBidPoints()` inside `submitAddDrop()`.
 
-## Impact
+4. **Duplicate-course Guardrails (Documented & Tested)**
+   - Rejects adding multiple sections of the same course within singular submissions.
+   - Checks campaign-scoped prior module additions (e.g., Add/Drop 1 courses cannot be added in Add/Drop 2 unless dropped).
 
-- Fixes the root cause in `NotificationTemplateResolver` for all notification types — any template with an empty-string `actionLabel` or `actionUrl` will now correctly fall back to `$data` values
-- PM notifications for switch submitted and switch cancelled now include a populated `action_url` and `action_label`, causing `notification-item.tsx` to render a "View Requests" button
-- Clicking "View Requests" navigates the PM directly to `/flex-switch/approval-request`
-- No impact on student-facing notifications (separate `create()` call, unchanged)
-- No impact on other `CUSTOM_ANNOUNCEMENT` usages where `action_url`/`action_label` are not provided in `$data` (they remain `null` as before)
-- No database migration, entity changes, or frontend changes required
+## Impact & Behavioral Changes
+
+- **API response & Database Schema:** Unchanged.
+- **Null Safety:** Missing `studentData` degrades gracefully to `0` values rather than throwing HTTP 500s.
+- **Capital Constraints:** Users can no longer exploit Add/Drop with underfunded capital.
+- **Duplicates:** Students entering Add/Drop with multi-round duplicates are forced to resolve them before any new changes apply.
+
+## Tests Added/Updated
+
+1. `AddDropServiceNullSafetyTest.php`: Summary and audit fallback validation with null `studentData`.
+2. `AddDropValidatorPreviousEnrollmentTest.php`:
+   - Parallel bidding duplicate blockage + resolution by dropping.
+   - Null-`studentData` bid-points pass/fail boundaries.
+   - Insufficient capital rejections vs. pass-via-drop-refund.
+   - Campaign-wide cross-module duplicate restrictions and same-submission duplication.
+
+## Verification
+
+- [x] All 4 entry point controllers verified conceptually (`StudentActiveCampaignController`, `CreateBiddingAddDropController`, `CampusExchangeAddDropWaitlistController`, `CampusExchangeAddDropAllotmentController`).
+- [x] `cmd /c vendor\bin\phpunit tests\Unit\Domain\Campaign\ActiveCampaign\AddDropServiceNullSafetyTest.php tests\Unit\Domain\Campaign\ActiveCampaign\Validator\AddDropValidatorPreviousEnrollmentTest.php`
