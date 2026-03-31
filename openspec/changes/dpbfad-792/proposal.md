@@ -12,13 +12,17 @@ In a campaign with parallel bidding, a student can bid on the same course in bot
 Submitting Add/Drop & Waitlist could fail with a fatal error: `Call to a member function getRemainingCapital() on null`. 
 `Student::getStudentData()` is nullable, but key Add/Drop paths dereferenced it directly when building summaries, audit payloads, and validating capital. This blocked submission for students missing `StudentData`.
 
+### 4. Module-Scoped Drop Targeting Flaw
+Dropping courses in one parallel bidding round (e.g., `bid2`) erroneously targeted and dropped identical course enrollments from another round (e.g., `bid1`). Drop queries and point refund calculations implicitly fetched the first available bid without scoping it to the active module.
+
 ## What Changes
 
 1. **Force resolution of parallel bidding duplicates**: Before processing any add/drop submission, detect if the student has multiple ENROLLED/SELECTED bids for the same course. If unresolved duplicates exist and the student's drops don't resolve them, reject the submission.
 2. **Cross-module add/drop duplicate prevention**: Verify/enforce that `validateNoDuplicateCoursesWithCurrentEnrollment()` blocks a student from adding a course in Add/Drop 2 that was already added in Add/Drop 1, and reject duplicate selections in the same submission.
 3. **Enable capital validation**: Uncomment/enable the `validateBidPoints()` call in `submitAddDrop()` to prevent negative capital.
 4. **Add null-safe financial snapshot handling**: Introduce `getStudentFinancialSnapshot(Student $student)` in `AddDropService` to safely read credits/capital with defaults. Use this snapshot for response calculations and audit logs. Harden `validateBidPoints()` to read capital via null-safe access.
-5. **Add regression tests**: Cover duplicate course resolution, capital validation, and null `studentData` behaviors.
+5. **Isolate drop operations by module**: Pass `$moduleId` into `findOneBy()` queries within `AddDropService` and `AddDropValidator` to guarantee drops, responses, and capital refunds strictly affect the active module.
+6. **Add regression tests**: Cover duplicate course resolution, capital validation, and null `studentData` behaviors.
 
 ## Capabilities
 

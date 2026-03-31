@@ -32,10 +32,14 @@ In parallel bidding campaigns (multiple modules), students can legitimately end 
    - Added `AddDropValidator::validateNoUnresolvedDuplicateEnrollments()` which mandates dropping all-but-one class per duplicated course.
    - Wired this validation symmetrically as step 4a in `submitAddDrop()` (runs unconditionally).
 
-3. **Capital Check Enablement**
+3. **Module-Scoped Add/Drop Resolution in `AddDropService`**
+   - Added `$moduleId` scoping to `findOneBy()` queries during drop processing, point refunds (`validateBidPoints()`), and response building (`buildResponse()`).
+   - Resolves a critical bug where dropping courses in one parallel bidding round (e.g. `bid2`) erroneously dropped identical course enrollments belonging to another round (e.g. `bid1`).
+
+4. **Capital Check Enablement**
    - Uncommented/enabled `validateBidPoints()` inside `submitAddDrop()`.
 
-4. **Duplicate-course Guardrails (Documented & Tested)**
+5. **Duplicate-course Guardrails (Documented & Tested)**
    - Rejects adding multiple sections of the same course within singular submissions.
    - Checks campaign-scoped prior module additions (e.g., Add/Drop 1 courses cannot be added in Add/Drop 2 unless dropped).
 

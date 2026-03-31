@@ -5,6 +5,7 @@ The bidding system Add/Drop & Waitlist phase has several missing guardrails and 
 2. **Capital Validation Disabled**: `validateBidPoints()` was implemented but commented out, allowing submissions to result in negative capital.
 3. **Missing Null Safety**: `Student::getStudentData()` is nullable, but was dereferenced directly in Add/Drop summary calculation, audit payload generation, and bid point validation, causing `Call to a member function getRemainingCapital() on null`.
 4. **Duplicate Safeguards**: Cross-module and same-submission duplicate add/drop validations were present but lacked formal coverage and artifact documentation.
+5. **Drop Targeting Flaws**: Dropping courses in `bid2` would erroneously drop identical course enrollments belonging to `bid1`.
 
 ## Goals / Non-Goals
 
@@ -13,6 +14,7 @@ The bidding system Add/Drop & Waitlist phase has several missing guardrails and 
 - Enable capital (bid points) validation to block negative capital submissions.
 - Eliminate null-dereference failures by centralizing a financial fallback helper (`getStudentFinancialSnapshot`) and using null-safe operators.
 - Ensure cross-module duplicate detection and drop-then-add logic works as intended and is covered by tests.
+- Isolate drop operations and capital refund queries to the active module (`$moduleId`) so parallel bidding rounds don't intersect.
 - Keep duplicate-course guardrail behavior explicit in regression tests.
 
 **Non-Goals:**
@@ -36,7 +38,11 @@ The bidding system Add/Drop & Waitlist phase has several missing guardrails and 
 - Use this snapshot in `buildResponse()` and `createAuditLog()`.
 - Update `validateBidPoints()` to use `$student->getStudentData()?->getRemainingCapital() ?? 0`.
 
-### 4. Lock in Existing Duplicate Guardrails
+### 4. Module-Scoped Add/Drop Filtering
+- Pass `$moduleId` into `buildResponse()`, `validateBidPoints()`, and drop tracking.
+- Apply `['campaignModule' => $moduleId]` to `findOneBy()` array limits. This precisely locks operations to the round the student interacts with, resolving cross-module drop bugs.
+
+### 5. Lock in Existing Duplicate Guardrails
 - Verify and test existing `validateNoDuplicateCoursesInSubmission` (same-submission duplicates) and `validateNoDuplicateCoursesWithCurrentEnrollment` (campaign-scoped, cross-module duplicates).
 - Ensure drop-then-add of the same course in one request is correctly permitted.
 

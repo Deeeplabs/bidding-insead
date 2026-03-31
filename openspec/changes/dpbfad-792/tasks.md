@@ -11,6 +11,7 @@
 - [x] 2.2 Add `validateNoUnresolvedDuplicateEnrollments(array $drops, Student $student, Campaign $campaign)` to `AddDropValidator.php`. Ensure it calculates remaining enrollment count after factoring in drops.
 - [x] 2.3 Call `validateNoUnresolvedDuplicateEnrollments()` in `AddDropService::submitAddDrop()` immediately after student eligibility check (Step 4a).
 - [x] 2.4 Enable `validateBidPoints()` in `AddDropService::submitAddDrop()` (Step 8a) and remove the comment stating it is not enforced.
+- [x] 2.5 Update `AddDropService.php` and `AddDropValidator.php` to pass `$moduleId` to limit finding dropped bids and refunded bid points exclusively to that specific module.
 
 ## 3. Regression Test Coverage
 
@@ -25,3 +26,4 @@
 - [x] 4.2 Manually verify parallel bidding duplicate forces drop.
 - [x] 4.3 Manually verify Add/Drop 1 course blocked in Add/Drop 2.
 - [x] 4.4 Manually verify negative capital submission is blocked.
+- [x] 4.5 Manually verify dropping courses exclusively targets the submitted bidding round via QA video assessment.
