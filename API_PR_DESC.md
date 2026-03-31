@@ -3,33 +3,23 @@
 ## Problem
 Jira: [DPBFAD-919](https://insead.atlassian.net/browse/DPBFAD-919)
 
-The Student Portal was displaying incorrect times (8-hour shift and DST-related shifts) for bidding rounds due to "Fake UTC" strings originating from the backend. The API was appending a `Z` suffix to dates formatted in the server's local timezone without prior conversion to UTC.
+The Student Portal was displaying incorrect times (such as round durations being `1d 23h` instead of exactly `48h`) because of a combination of "Fake UTC" strings and Doctrine timezone drift. When a PM configured a round from March 28 to March 30, the naive `DATETIME` saved in MySQL was loaded by Doctrine using the server's default timezone (`Europe/Paris`). The previous fix attempted to convert this `DateTime` object to UTC using `setTimezone()`, which inadvertently shifted the time backward by an hour during daylight saving time transitions, causing countdowns to clip an hour.
 
 ### 3. Capital (Bid Points) Check Disabled
 `AddDropValidator::validateBidPoints()` had correct logic but was never called in `AddDropService::submitAddDrop()`. This loophole allowed submissions resulting in negative bid point balances.
 
 ### 1. `bidding-api/src/Helper/DateHelper.php`
-- Refactored `toIso()` to perform an explicit conversion to UTC before formatting with the `Z` suffix.
-- Added `DateHelper::parse()` to robustly handle both ISO strings (with Z/offset) and MySQL naive strings, ensuring all date inputs are interpreted as UTC.
-- Handles both `\DateTime` and `\DateTimeImmutable` objects correctly.
+- Refactored `toIso()` to completely avoid shifting hours across DST boundaries. It now extracts the naive string from the Doctrine-provided `DateTime` (i.e. `Y-m-d H:i:s`) and re-instantiates it directly mapped to a `UTC` timezone.
+- Updated `DateHelper::parse()` to robustly handle incoming ISO strings and explicitly map them to UTC so Doctrine persists the exact requested time in the naive `DATETIME` columns without any server offset drift.
 
-### 2. `bidding-api/src/Controller/Api/Student/Campaign/StudentActiveCampaignController.php`
-- Replaced manual `.format('Y-m-d H:i:s')` calls for campaign deadlines with `DateHelper::toIso()`.
-- Standardized the API output for all student portal endpoints to ensure true ISO-8601 UTC strings are sent to the frontend.
-
-### 3. `bidding-api/src/Domain/Campaign/Campaign/CampaignService.php`
-- Updated `saveWithModules()` to use `DateHelper::parse()` when persisting dates from `module_config`. This ensures that even if the PM's browser or the backend server is in a local timezone, the dates are stored correctly in the database as UTC.
-- Removed legacy `new \DateTime()` calls that were vulnerable to local server timezone offsets.
-
-### 4. `bidding-api/src/Domain/Campaign/ActiveCampaign/Mapper/CampaignToModuleDetailDtoMapper.php`
-- Replaced `createFromFormat` with `DateHelper::parse()` to correctly handle both ISO strings (with Z) and MySQL strings. This fixes the parsing failures that caused incorrect phase status (Open/Closed) and broken countdowns.
+### 2. Standardized Controllers & Mappers
+- Used `DateHelper::toIso()` and `DateHelper::parse()` in `StudentActiveCampaignController` and `CampaignToModuleDetailDtoMapper` to ensure that standard UTC strings (ending in `Z`) are constantly sent to the frontend, representing the exact original time configured by the PM.
 
 ## Impact
-- **No Migrations**: This change affects only the presentation layer of the API.
-- **Improved Data Integrity**: The API now provides a consistent, true UTC "source of truth", which is the standard requirement for cross-regional campus support.
-- **Frontend Sync**: Directly enables the frontend display fix by removing the source of incorrect timezone offsets.
+- **No Database Migrations**: This change fixes the interpretation layer without modifying database schema.
+- **Eliminates DST Drift**: Timers no longer incorrectly display `1d 23h` when a 48 hour round is scheduled passing over a DST change, since the backend now preserves the absolute intent of the configured times as identical UTC representations regardless of server timezone.
 
 ## Verification Steps
-1. Perform a `GET` request to `/student/active-campaigns/{campaignId}`.
-2. Verify that `start_date`, `end_date`, and `course_class_deadline` strings now end in `.000Z` and reflect the correct UTC time (not local server time).
-3. Confirm that students in SGT now see the intended times without the 8-hour shift.
+1. Create a campaign crossing a DST boundary (e.g. March 28 to March 30).
+2. Perform a `GET` request to `/student/active-campaigns/{campaignId}`.
+3. Verify that `start_date`, `end_date`, and `course_class_deadline` strings mathematically equate to the exact naive database times without dropping an hour.
