@@ -10,6 +10,7 @@ This PR addresses critical validation gaps and runtime crash risks across the Bi
 4. Aligns and documents existing duplicate-course validation guardrails (cross-module and same-request duplicates) with robust test coverage.
 5. Introduces strict validation during the active Bidding phase to prevent students from submitting bids for the same exact course across multiple active parallel bidding rounds (e.g., BIDDING1 and BIDDING2).
 6. Fixes a fatal error caused by referencing the undefined `BidStatus::SUBMITTED` enum case in the cross-round duplicate query, which caused a 500 Internal Server Error on every bid submission.
+7. Fixes a Doctrine `[Semantical Error]` caused by referencing non-existent `b.moduleId` DQL field instead of the correct `b.campaignModule` association in the cross-round duplicate query.
 
 ## Problem Context
 
@@ -27,6 +28,9 @@ In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could in
 
 ### 5. Undefined BidStatus::SUBMITTED in Cross-Round Query
 `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` referenced `BidStatus::SUBMITTED`, which does not exist in the `BidStatus` enum. PHP throws a fatal `Error` for undefined enum cases before the null-coalescing (`??`) fallback can execute, resulting in a 500 Internal Server Error whenever a student attempts to submit bids during the Bidding phase.
+
+### 6. Incorrect DQL Field Reference `b.moduleId` in Cross-Round Query
+`BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` used `b.moduleId` in the DQL `andWhere` clause, but the `Bid` entity has no field or association named `moduleId`. The correct Doctrine association field is `campaignModule` (mapped to column `campaign_module_id`). This caused a `[Semantical Error] line 0, col 200 near 'moduleId != '` on every bid submission when a parallel module exclusion was applied.
 
 ## What Changed
 
@@ -59,6 +63,9 @@ In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could in
 7. **Fix undefined `BidStatus::SUBMITTED` enum reference**
    - Replaced `BidStatus::SUBMITTED` with `BidStatus::PENDING` in `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`. The `BidStatus` enum has no `SUBMITTED` case; bids during the Bidding phase are stored with status `PENDING` (value `10`). The previous code caused a fatal PHP `Error` on every bid submission attempt.
 
+8. **Fix incorrect DQL field `b.moduleId` → `b.campaignModule`**
+   - Replaced `b.moduleId` with `b.campaignModule` in the exclude-module clause of `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`. The `Bid` entity has no `moduleId` property; the correct ManyToOne association is `campaignModule` (column `campaign_module_id`). This resolved the `[Semantical Error] line 0, col 200` that occurred on bid submission.
+
 ## Impact & Behavioral Changes
 
 - **API response & Database Schema:** Unchanged.
@@ -82,3 +89,4 @@ In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could in
 - [x] All entry point controllers verified conceptually.
 - [x] PHPUnit suite tests run and passed cleanly.
 - [x] Fix verified: `BidStatus::SUBMITTED` reference removed, replaced with `BidStatus::PENDING` — bid submissions no longer produce 500 errors.
+- [x] Fix verified: `b.moduleId` replaced with `b.campaignModule` — Doctrine semantical error on bid submission resolved.

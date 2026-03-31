@@ -37,3 +37,4 @@
 - [x] 5.5 Manually verify dropping courses exclusively targets the submitted bidding round via QA video assessment.
 - [x] 5.6 Manually verify submitting a course in BIDDING1 restricts the same course submission in BIDDING2.
 - [x] 5.7 Fix `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`: replace undefined `BidStatus::SUBMITTED` with `BidStatus::PENDING` to resolve 500 Internal Server Error on bid submission.
+- [x] 5.8 Fix `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`: replace incorrect DQL field `b.moduleId` with `b.campaignModule` — `Bid` entity has no `moduleId` field/association, causing `[Semantical Error] line 0, col 200 near 'moduleId != '`.

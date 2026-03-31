@@ -1,25 +1,27 @@
 ## Why
 
-Four issues exist across the Bidding and Add/Drop & Waitlist phases:
+Seven issues exist across the Bidding and Add/Drop & Waitlist phases:
 
-### 1. Duplicate Course Enrollments from Parallel Bidding Rounds Not Forced to Resolve
-In a campaign with parallel bidding, a student can bid on the same course in both rounds. After simulation, both bids can result in ENROLLED status, creating two ENROLLED bids for the same course in the same campaign. The current system has no validation that forces the student to drop one of these duplicates before proceeding with Add/Drop submissions. `validateNoDuplicateCoursesWithCurrentEnrollment()` correctly blocks adding new duplicates, but doesn't force resolution of pre-existing ones.
+### 1. Null-Dereference on Missing StudentData
+During processing (including summary calculations and audit logging), the API directly dereferenced `Student::getStudentData()` without null checks. For students with missing data, this caused fatal runtime errors (`Call to a member function getRemainingCapital() on null`) blocking Add/Drop submission.
 
-### 2. Capital (Bid Points) Validation Not Enforced
-`validateBidPoints()` exists in `AddDropValidator` but was never called in `AddDropService::submitAddDrop()`. This allowed students to submit add/drop requests that result in negative capital (spending more bid points than available).
+### 2. Unresolved Parallel Bidding Duplicates
+In parallel bidding campaigns (multiple modules), students can legitimately end up with duplicate ENROLLED bids for the same course. However, there was no validation forcing them to drop one before performing Add/Drop manipulations. `validateNoDuplicateCoursesWithCurrentEnrollment()` correctly blocks adding new duplicates, but doesn't force resolution of pre-existing ones.
 
-### 3. Null-Dereference Failure on missing StudentData
-Submitting Add/Drop & Waitlist could fail with a fatal error: `Call to a member function getRemainingCapital() on null`. 
-`Student::getStudentData()` is nullable, but key Add/Drop paths dereferenced it directly when building summaries, audit payloads, and validating capital. This blocked submission for students missing `StudentData`.
+### 3. Capital (Bid Points) Check Disabled
+`validateBidPoints()` exists in `AddDropValidator` but was never called in `AddDropService::submitAddDrop()`. This loophole allowed submissions resulting in negative bid point balances.
 
 ### 4. Module-Scoped Drop Targeting Flaw
 Dropping courses in one parallel bidding round (e.g., `bid2`) erroneously targeted and dropped identical course enrollments from another round (e.g., `bid1`). Drop queries and point refund calculations implicitly fetched the first available bid without scoping it to the active module.
 
-### 5. Duplicate Submission in Parallel Bidding Rounds
-Users are able to submit bids for the same exact course across multiple parallel bidding rounds (e.g., BIDDING1 and BIDDING2) during the Bidding phase. There's no cross-round validation to prevent a user from selecting a course in BIDDING2 that they have already submitted/selected in BIDDING1.
+### 5. Direct Duplicate Submission in Parallel Bidding Modules
+In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could independently submit bids for the identical course in both modules. There was no cross-module evaluation of open bids to halt duplicate course selections until after bids were computed to enrollments.
 
-### 6. Undefined BidStatus::SUBMITTED Reference in Cross-Round Query
-`BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` referenced `BidStatus::SUBMITTED`, which does not exist in the `BidStatus` enum. PHP throws a fatal `Error` for undefined enum cases (the `??` fallback operator never executes), causing a 500 Internal Server Error whenever a student attempts to submit bids. The correct status for submitted bids during the Bidding phase is `BidStatus::PENDING`.
+### 6. Undefined BidStatus::SUBMITTED in Cross-Round Query
+`BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` referenced `BidStatus::SUBMITTED`, which does not exist in the `BidStatus` enum. PHP throws a fatal `Error` for undefined enum cases before the null-coalescing (`??`) fallback can execute, resulting in a 500 Internal Server Error whenever a student attempts to submit bids during the Bidding phase.
+
+### 7. Incorrect DQL Field Reference `b.moduleId` in Cross-Round Query
+`BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` used `b.moduleId` in DQL, but the `Bid` entity has no field or association named `moduleId`. The correct Doctrine association field is `campaignModule` (mapped to column `campaign_module_id`). This caused a `[Semantical Error] line 0, col 200 near 'moduleId != '` on every bid submission when a student had a parallel module to exclude.
 
 ## What Changes
 
@@ -30,7 +32,8 @@ Users are able to submit bids for the same exact course across multiple parallel
 5. **Isolate drop operations by module**: Pass `$moduleId` into `findOneBy()` queries within `AddDropService` and `AddDropValidator` to guarantee drops, responses, and capital refunds strictly affect the active module.
 6. **Cross-round Bidding duplicate prevention**: Add validation in `BidValidator` during the Bidding phase to retrieve the student's bids in parallel rounds (using a new query in `BidRepository`) and throw an exception if they are trying to bid on a course they already bidded on.
 7. **Fix BidStatus::SUBMITTED reference**: Replace the undefined `BidStatus::SUBMITTED` enum case with `BidStatus::PENDING` in `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` to resolve the 500 error on bid submission.
-8. **Add regression tests**: Cover duplicate course resolution, capital validation, null `studentData` behaviors, and cross-round Bidding duplicates.
+8. **Fix incorrect DQL field `b.moduleId`**: Replace `b.moduleId` with `b.campaignModule` in `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` to resolve `[Semantical Error]` caused by referencing a non-existent field on the `Bid` entity.
+9. **Add regression tests**: Cover duplicate course resolution, capital validation, null `studentData` behaviors, and cross-round Bidding duplicates.
 
 ## Capabilities
 
