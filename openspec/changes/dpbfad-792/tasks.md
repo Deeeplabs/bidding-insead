@@ -21,30 +21,34 @@
 - [x] 3.3 Capital validation: Add/update `AddDropValidatorPreviousEnrollmentTest` scenarios for null `studentData` bid-point passes, negative capital rejection, and drop-refund offset successes.
 - [x] 3.4 Cross-Module Duplicates: Add tests for `validateNoDuplicateCoursesWithCurrentEnrollment()` cross-module detection, same-submission duplicate rejection, and drop-then-add parity.
 
-## 4. Parallel Bidding Submission Validation & UI Polish
+## 4. Bidding Round Validation Changes
 
-- [x] 4.1 Provide new query `findSubmittedCourseIdsInParallelRoundsByStudentAndProgram` in `bidding-api/src/Repository/BidRepository.php` to fetch course IDs that the given student has submitted across currently running parallel bidding rounds in the current Program (excluding the current module ID). Use `BidStatus::SELECTED` to filter submitted bids.
-- [x] 4.2 Add `validateNoParallelRoundDuplicates(array $newBids, Student $student, Campaign $campaign, int $activeModuleId)` to `bidding-api/src/Domain/Campaign/ActiveCampaign/Validator/BidValidator.php`.
-- [x] 4.3 Invoke `validateNoParallelRoundDuplicates()` from within `BidValidator->validate()` to reject the overall bid submission if cross-round duplicates are detected for PRIMARY bids.
-- [x] 4.4 Bidding cross-round duplicates: Add test scenarios to `BidValidatorTest` to cover parallel bidding duplicate submission prevention.
-- [x] 4.5 **Relax Backup Validation**: Update `BidValidator::validateNoDuplicates()` to allow same-course-different-section if one is a backup.
-- [x] 4.6 **Relax Backup Validation**: Skip `validateNoParallelRoundDuplicates()` for backup bids in `BidValidator.php`.
-- [x] 4.7 **UI Blocking**: Implement logic in `bidding-web` (`validation.util.ts`) to accept full course objects and validate `is_enrolled` and `unavailable_reason`.
-- [x] 4.8 **Audit Logging**: Add late submission logging via `AuditLogService` in `BidValidator.php`.
-- [x] 4.9 **Config Fix**: Corrected `min_capital_per_student` key mismatch in `BidValidator.php`.
+- [x] 4.1 **Remove cross-round duplicate prevention from bidding**: Remove the `validateNoParallelRoundDuplicates()` call from `BidValidator::validate()`. Students are allowed to submit the same bids for the same courses in 2 or more active parallel bidding rounds.
+- [x] 4.2 **Relax Backup Validation**: Update `BidValidator::validateNoDuplicates()` to allow same-course-different-section if one is a backup.
+- [x] 4.3 **Relax Backup Validation**: Ensure `validateTimeConflicts()` continues to skip backup bids when evaluating schedule overlaps.
+- [x] 4.4 **Config Fix**: Correct `min_capital_per_student` key mismatch in `BidValidator.php`.
+- [x] 4.5 **Keep Previously Enrolled Blocking**: Confirm `validateNoPreviousEnrollment()` remains in `BidValidator::validate()` — students cannot bid on courses they have already completed/enrolled in from prior campaigns.
+- [x] 4.6 Fix `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`: replace undefined `BidStatus::SUBMITTED` with `BidStatus::SELECTED`.
+- [x] 4.7 Fix `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`: replace incorrect DQL field `b.moduleId` with `b.campaignModule`.
 
-## 5. Verification
+## 5. UI — Add/Drop Dropdown Enrolled Course Disabling
 
-- [x] 5.1 Run PHPUnit tests covering `AddDropServiceNullSafetyTest.php` and `AddDropValidatorPreviousEnrollmentTest.php`.
-- [x] 5.2 Manually verify parallel bidding duplicate forces drop.
-- [x] 5.3 Manually verify Add/Drop 1 course blocked in Add/Drop 2.
-- [x] 5.4 Manually verify negative capital submission is blocked.
-- [x] 5.5 Manually verify dropping courses exclusively targets the submitted bidding round.
-- [x] 5.6 Manually verify submitting a course in BIDDING1 restricts the same course submission in BIDDING2.
-- [x] 5.7 Fix `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`: replace undefined `BidStatus::SUBMITTED` with `BidStatus::SELECTED` to resolve 500 error.
-- [x] 5.8 Fix `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`: replace incorrect DQL field `b.moduleId` with `b.campaignModule`.
-- [x] 5.9 Verify students can add the same course with different sections in backup.
-- [x] 5.10 Verify no validation error for time conflicts with primary courses for backups.
-- [x] 5.11 Verify no validation error for duplicate submission with previous bidding round for backups.
-- [x] 5.12 Verify UI correctly blocks selection of previously enrolled courses and shows toast notifications.
-- [x] 5.13 Verify build errors in `bidding-web` are resolved and type safety is enforced in `use-bidding-form.ts`.
+- [x] 5.1 **Dropdown Disabling**: In `use-course-options.ts`, ensure courses with `is_enrolled === true` are disabled with "Previously Enrolled" reason in the Add/Drop phase dropdown. This prevents selection at the UI level.
+- [x] 5.2 **`getUnavailableReason` priority**: Ensure the `is_enrolled` check in `getUnavailableReason()` fires before other conditions (credit, full, fallback) so enrolled courses are always disabled regardless of seat availability.
+- [x] 5.3 **Safety net validation**: In `validation.util.ts`, `validateCourseAddition()` checks `is_enrolled` and `unavailable_reason` on the `AvailableCourse` object. If a course bypasses dropdown disabling, this validation blocks it with a toast error.
+- [x] 5.4 **Toast feedback**: In `use-add-drop-waitlist-form.tsx`, `handleAddCourse` calls `validateCourseAddition()` and shows a toast error for invalid courses (including enrolled).
+- [x] 5.5 **Bidding round dropdown**: Confirm the bidding form dropdown (`use-bidding-form.ts`) does NOT disable courses that are bid on in parallel rounds. Only previously enrolled and conflicting courses are disabled.
+
+## 6. Verification
+
+- [x] 6.1 Run PHPUnit tests covering `AddDropServiceNullSafetyTest.php` and `AddDropValidatorPreviousEnrollmentTest.php`.
+- [x] 6.2 Manually verify parallel bidding duplicate forces drop in Add/Drop.
+- [x] 6.3 Manually verify Add/Drop 1 course blocked in Add/Drop 2.
+- [x] 6.4 Manually verify negative capital submission is blocked.
+- [x] 6.5 Manually verify dropping courses exclusively targets the submitted bidding round.
+- [x] 6.6 Manually verify students CAN submit the same course in BIDDING1 and BIDDING2 without error.
+- [x] 6.7 Verify students can add the same course with different sections in backup.
+- [x] 6.8 Verify no validation error for time conflicts with primary courses for backups.
+- [x] 6.9 Verify UI correctly disables previously enrolled courses in the Add/Drop dropdown (cannot be selected).
+- [x] 6.10 Verify UI shows "Previously Enrolled" label on disabled courses in Add/Drop dropdown.
+- [x] 6.11 Verify build errors in `bidding-web` are resolved and type safety is enforced.

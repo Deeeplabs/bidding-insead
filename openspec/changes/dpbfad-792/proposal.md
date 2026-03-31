@@ -14,8 +14,8 @@ In parallel bidding campaigns (multiple modules), students can legitimately end 
 ### 4. Module-Scoped Drop Targeting Flaw
 Dropping courses in one parallel bidding round (e.g., `bid1`) erroneously targeted and dropped identical course enrollments from another round (e.g., `bid1`). Drop queries and point refund calculations implicitly fetched the first available bid without scoping it to the active module.
 
-### 5. Direct Duplicate Submission in Parallel Bidding Modules
-In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could independently submit bids for the identical course in both modules. There was no cross-module evaluation of open bids to halt duplicate course selections until after bids were computed to enrollments.
+### 5. Enrolled Courses Not Disabled in Add/Drop Dropdown
+In the Add/Drop & Waitlist phase, courses that students are already enrolled in are not blocked or disabled in the course selection dropdown. Students can select these courses again and only encounter a hard block error after submitting/saving. Enrolled courses should be preemptively disabled in the dropdown at the UI level, preventing selection entirely.
 
 ### 6. Undefined BidStatus::SUBMITTED in Cross-Round Query
 `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` referenced `BidStatus::SUBMITTED`, which does not exist in the `BidStatus` enum. PHP throws a fatal `Error` for undefined enum cases before the null-coalescing (`??`) fallback can execute, resulting in a 500 Internal Server Error whenever a student attempts to submit bids during the Bidding phase.
@@ -25,27 +25,26 @@ In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could in
 
 ## What Changes
 
-1. **Force resolution of parallel bidding duplicates**: Before processing any add/drop submission, detect if the student has multiple ENROLLED/SELECTED bids for the same course. If unresolved duplicates exist and the student's drops don't resolve them, reject the submission.
+1. **Force resolution of parallel bidding duplicates in Add/Drop**: Before processing any add/drop submission, detect if the student has multiple ENROLLED/SELECTED bids for the same course. If unresolved duplicates exist and the student's drops don't resolve them, reject the submission.
 2. **Cross-module add/drop duplicate prevention**: Verify/enforce that `validateNoDuplicateCoursesWithCurrentEnrollment()` blocks a student from adding a course in Add/Drop 2 that was already added in Add/Drop 1, and reject duplicate selections in the same submission.
 3. **Enable capital validation**: Uncomment/enable the `validateBidPoints()` call in `submitAddDrop()` to prevent negative capital.
 4. **Add null-safe financial snapshot handling**: Introduce `getStudentFinancialSnapshot(Student $student)` in `AddDropService` to safely read credits/capital with defaults. Use this snapshot for response calculations and audit logs. Harden `validateBidPoints()` to read capital via null-safe access.
 5. **Isolate drop operations by module**: Pass `$moduleId` into `findOneBy()` queries within `AddDropService` and `AddDropValidator` to guarantee drops, responses, and capital refunds strictly affect the active module.
-6. **Cross-round Bidding duplicate prevention**: Add validation in `BidValidator` during the Bidding phase to retrieve the student's bids in parallel rounds (using a new query in `BidRepository`) and throw an exception if they are trying to bid on a primary course they already bidded on.
+6. **Remove cross-round bidding duplicate prevention**: Remove `validateNoParallelRoundDuplicates()` from `BidValidator` during the Bidding phase. Students are allowed to submit the same bids for the same courses across 2 or more active parallel bidding rounds. The only restrictions during bidding are: (a) cannot bid on previously enrolled courses, and (b) cannot bid on time-conflicting courses.
 7. **Fix BidStatus::SUBMITTED reference**: Replace the undefined `BidStatus::SUBMITTED` enum case with `BidStatus::SELECTED` in `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` to resolve the 500 error on bid submission.
 8. **Fix incorrect DQL field `b.moduleId`**: Replace `b.moduleId` with `b.campaignModule` in `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` to resolve `[Semantical Error]` caused by referencing a non-existent field on the `Bid` entity.
 9. **Relax backup selection validation**: Update `BidValidator` to remove conflict and duplicate submission restrictions specifically for backup courses. Allow students to select the same course with different sections in backup and remove time conflict validation for backup courses.
-10. **UI blocking for previously enrolled courses**: Update the Add/Drop modal in `bidding-web` to disable/block selection of courses the student has already enrolled in, rather than allowing selection and showing an error message on save.
-11. **Add regression tests**: Cover duplicate course resolution, capital validation, null `studentData` behaviors, cross-round Bidding duplicates, and the new relaxed backup logic.
+10. **UI disabling for enrolled courses in Add/Drop dropdown**: Update the Add/Drop course selection dropdown in `bidding-web` to preemptively disable courses that the student is already enrolled in. Enrolled courses should appear disabled with a "Previously Enrolled" label, preventing selection at the UI level rather than showing an error after submission.
+11. **Add regression tests**: Cover duplicate course resolution, capital validation, null `studentData` behaviors, and the new relaxed backup logic.
 
 ## Capabilities
 
 ### New Capabilities
-- `bidding-duplicate-course-prevent`: Prevent users from bidding on the same primary course across parallel bidding rounds during the Bidding phase.
 - `relaxed-backup-validation`: Allow flexible backup selections including duplicate courses in different sections, time conflicts with primary courses, and cross-round duplicates.
 - `add-drop-duplicate-course-check`: Detect and reject duplicate courses during Add/Drop, including unresolved duplicate enrollments from parallel bidding, cross-module duplicate prevention, and same-submission duplication.
 - `add-drop-studentdata-null-safety`: Add/Drop submission and validation safely handle missing `StudentData` without fatal errors.
 - `enforce-capital-validation`: Capital validation is enforced during Add/Drop submissions.
-- `ui-blocking-enrolled-courses`: Student cannot select previously enrolled courses in the Add/Drop UI.
+- `ui-blocking-enrolled-courses`: Previously enrolled courses are disabled in the Add/Drop course selection dropdown. They cannot be selected; they show a "Previously Enrolled" reason and are visually disabled.
 
 ### Modified Capabilities
 - None.
@@ -67,4 +66,4 @@ In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could in
   - `CreateBiddingAddDropController`
   - `AddDropModal` (frontend)
   - `BiddingCourseList` (frontend)
-
+- **Bidding round behavior change:** Cross-round duplicate prevention is REMOVED from the bidding phase. Students can freely bid on the same course in multiple parallel bidding rounds. Only previously-enrolled course blocking and time conflict validation remain.

@@ -10,7 +10,7 @@ This PR addresses critical validation gaps and runtime crash risks across the Bi
 2. Enforces mandatory resolution of pre-existing duplicate course enrollments stemming from parallel bidding rounds during Add/Drop.
 3. Enables strict capital (bid points) validation which was previously bypassed, blocking negative capital submissions.
 4. Aligns and documents existing duplicate-course validation guardrails (cross-module and same-request duplicates) with robust test coverage.
-5. Introduces strict validation during the active Bidding phase to prevent students from submitting bids for the same exact course across multiple active parallel bidding rounds (e.g., BIDDING1 and BIDDING2).
+5. Removes cross-round duplicate prevention from the Bidding phase — students are now allowed to submit bids for the same course across multiple active parallel bidding rounds (e.g., BIDDING1 and BIDDING2). Duplicate resolution is deferred to the Add/Drop phase.
 6. Fixes a fatal error caused by referencing the undefined `BidStatus::SUBMITTED` enum case in the cross-round duplicate query, which caused a 500 Internal Server Error on every bid submission.
 7. Fixes a Doctrine `[Semantical Error]` caused by referencing non-existent `b.moduleId` DQL field instead of the correct `b.campaignModule` association in the cross-round duplicate query.
 8. Relaxes backup selection validation to allow students more flexibility when picking alternative courses.
@@ -26,8 +26,10 @@ In parallel bidding campaigns (multiple modules), students can legitimately end 
 ### 3. Capital (Bid Points) Check Disabled
 `AddDropValidator::validateBidPoints()` had correct logic but was never called in `AddDropService::submitAddDrop()`. This loophole allowed submissions resulting in negative bid point balances.
 
-### 4. Direct Duplicate Submission in Parallel Bidding Modules
-In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could independently submit bids for the identical course in both modules. There was no cross-module evaluation of open bids to halt duplicate course selections until after bids were computed to enrollments.
+### 4. Cross-Round Bidding Duplicates (Revised — No Longer Blocked)
+Previously, there was no cross-module evaluation of bids to prevent the same course from being submitted in parallel bidding rounds. This was initially planned as a validation block, but per business requirements, students **should** be allowed to bid on the same course in multiple parallel bidding rounds (e.g., BIDDING1 and BIDDING2). The only restrictions during the Bidding phase are:
+- Cannot bid on courses the student is **already enrolled in** from prior campaigns.
+- Cannot bid on **time-conflicting** courses.
 
 ### 5. Undefined BidStatus::SUBMITTED in Cross-Round Query
 `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` referenced `BidStatus::SUBMITTED`, which does not exist in the `BidStatus` enum. PHP throws a fatal `Error` for undefined enum cases before the null-coalescing (`??`) fallback can execute, resulting in a 500 Internal Server Error whenever a student attempts to submit bids during the Bidding phase.
@@ -58,10 +60,12 @@ In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could in
 5. **Duplicate-course Guardrails (Documented & Tested)**
    - Rejects adding multiple sections of the same course within singular submissions.
    - Checks campaign-scoped prior module additions (e.g., Add/Drop 1 courses cannot be added in Add/Drop 2 unless dropped).
+   - Added UI-level blocking via the `AddDropAvailableCourseDto` using `disabled_reason = 'already_enrolled_in_campaign'` and `'already_waitlisted_in_campaign'` for courses the student is already enrolled/waitlisted in within the current campaign (cross-module duplicate detection).
 
-6. **Cross-Round Duplicate Submission Prevention (`BidValidator`)**
-   - Implemented `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` to query for courses actively bidded on in parallel bidding round modules.
-   - Added `BidValidator::validateNoParallelRoundDuplicates()` evaluating prior PENDING selections to robustly block users from placing new requests on duplicated courses during the immediate Bidding Phase.
+6. **Cross-Round Duplicate Prevention REMOVED from Bidding Phase (`BidValidator`)**
+   - Commented out the `validateNoParallelRoundDuplicates()` call in `BidValidator::validate()`.
+   - Students are now **allowed** to submit bids for the same course across multiple parallel bidding rounds (e.g., BIDDING1 and BIDDING2). This is intentional — duplicate resolution occurs during the Add/Drop phase via `AddDropValidator::validateNoUnresolvedDuplicateEnrollments()`.
+   - The `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` query and `BidValidator::validateNoParallelRoundDuplicates()` method are retained in code but not called during bidding validation.
 
 7. **Fix undefined `BidStatus::SUBMITTED` enum reference**
    - Replaced `BidStatus::SUBMITTED` with `BidStatus::SELECTED` in `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`. The `BidStatus` enum has no `SUBMITTED` case; bids during the Bidding phase are initially stored with status `SELECTED` (value `1`). The previous code caused a fatal PHP `Error` on every bid submission attempt.
@@ -71,19 +75,30 @@ In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could in
 
 9. **Relaxed Backup Validation (`BidValidator`)**
    - Updated `validateNoDuplicates()` to allow multiple sections of the same course as long as one of them is a backup.
-   - Updated `validateNoParallelRoundDuplicates()` to skip verification for backup bids, allowing students to submit backups even if the course is already part of an active submission in another parallel round.
+   - `validateTimeConflicts()` continues to skip backup bids when evaluating schedule overlaps.
+   - `validateNoPreviousEnrollment()` remains enforced — students still cannot bid on previously enrolled courses from prior campaigns.
 
 10. **Refactor and Fix `BidValidator` Capital Logic**
     - Corrected the configuration key from `min_bids_entire_round` to `min_capital_per_student` in `validateCapital()`. The previous key was mismatched with the actual campaign configuration.
     - Simplified `validateCapital()` signature by removing unused `$moduleId` and `$student` parameters.
     - Improved type safety by casting `bidPoints` to integer during summation.
 
+## Bidding Phase Validation Summary
+
+| Validation | Primary Bids | Backup Bids |
+|---|---|---|
+| Previously enrolled courses | ❌ Blocked | ❌ Blocked |
+| Time conflicts | ❌ Blocked | ✅ Allowed |
+| Same course across parallel rounds | ✅ Allowed | ✅ Allowed |
+| Same course in single submission | ❌ Blocked | ✅ Allowed (different section) |
+
 ## Impact & Behavioral Changes
 
 - **API response & Database Schema:** Unchanged.
 - **Null Safety:** Missing `studentData` degrades gracefully to `0` values rather than throwing HTTP 500s.
 - **Capital Constraints:** Users can no longer exploit Add/Drop with underfunded capital.
-- **Duplicates:** Students entering Add/Drop with multi-round duplicates are forced to resolve them before any new changes apply. Furthermore, Bidding users are halted from generating duplications spanning multiple modules prior to simulation.
+- **Duplicates (Add/Drop):** Students entering Add/Drop with multi-round duplicates are forced to resolve them before any new changes apply.
+- **Duplicates (Bidding):** Students **CAN** now bid on the same course in multiple parallel bidding rounds. Cross-round duplicate prevention is removed from the bidding phase. Duplicate resolution is deferred to the Add/Drop phase.
 
 ## Tests Added/Updated
 
@@ -93,8 +108,6 @@ In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could in
    - Null-`studentData` bid-points pass/fail boundaries.
    - Insufficient capital rejections vs. pass-via-drop-refund.
    - Campaign-wide cross-module duplicate restrictions and same-submission duplication.
-3. `BidValidatorPreviousEnrollmentTest.php`:
-   - Enforce rejection upon detecting parallel bid submission on duplicated course across multiple modules.
 
 ## Verification
 
@@ -103,4 +116,5 @@ In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could in
 - [x] Fix verified: `BidStatus::SUBMITTED` reference removed, replaced with `BidStatus::SELECTED` — bid submissions no longer produce 500 errors.
 - [x] Fix verified: `b.moduleId` replaced with `b.campaignModule` — Doctrine semantical error on bid submission resolved.
 - [x] Verified backup flexibility: students can now add the same course in different sections if one is marked as backup.
-- [x] Verified cross-round duplicate bypass for backups: users can select courses as backups even if they are in parallel rounds.
+- [x] Verified cross-round duplicate prevention is removed: students CAN submit the same course in BIDDING1 and BIDDING2 without error.
+- [x] Verified previously enrolled course blocking remains in the bidding phase.
