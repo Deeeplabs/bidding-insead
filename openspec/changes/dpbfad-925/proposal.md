@@ -2,10 +2,12 @@
 
 Programme Managers receive notifications when students submit or cancel flex switch requests, but the notifications are view-only — there is no link to navigate directly to the approval request page. PMs must manually navigate to `/flex-switch/approval-request` after reading the notification, which adds friction to their workflow.
 
+Despite `action_url` and `action_label` values already being passed in the `$data` array of the `createBulk()` calls, the `action_label` field on the stored `Notification` entity is still `null`. The root cause is in `NotificationTemplateResolver::render()` — its fallback logic uses strict null comparison (`=== null`) to decide whether to use `$data['action_label']`. If the `CUSTOM_ANNOUNCEMENT` template's `actionLabel` column in the database is an empty string (`''`) rather than `NULL` (e.g. a PM edited the template via the admin UI and cleared the field), the fallback is skipped and the empty string propagates to the notification.
+
 ## What Changes
 
-- Add `action_url` and `action_label` to the `$data` array passed to `notificationService->createBulk()` in `FlexSwitchService::submitRequest()` (PM notification block) and `FlexSwitchService::cancelRequest()` (PM notification block).
-- The `CUSTOM_ANNOUNCEMENT` template already supports `{{action_url}}` and `{{action_label}}` placeholders; they are currently unresolved because no values are passed for them, causing the template resolver to null them out. Passing the values will populate the `action_url` and `action_label` fields on stored `Notification` entities.
+- **Root-cause fix** in `NotificationTemplateResolver::render()`: change the fallback guard from `=== null` to a falsy check (`empty()`) for both `actionUrl` and `actionLabel`, so that `null`, `''`, and unresolved placeholders all trigger the data-array fallback.
+- **Data-passing** (already in place): `FlexSwitchService::submitRequest()` and `cancelRequest()` PM `createBulk()` calls pass `'action_url' => '/flex-switch/approval-request'` and `'action_label' => 'View Requests'` in `$data`.
 - The `notification-item.tsx` frontend component already conditionally renders a navigation button when `action_url` is present — no frontend changes are required.
 
 ## Capabilities
@@ -18,9 +20,11 @@ _(none — no existing spec-level requirements are changing)_
 
 ## Impact
 
+- **Domain**: `bidding-api/src/Domain/Notification/NotificationTemplateResolver.php`
+  - `render()` — fix fallback guard for `actionUrl` and `actionLabel` from `=== null` to falsy check
 - **Service**: `bidding-api/src/Service/FlexSwitch/FlexSwitchService.php`
-  - `submitRequest()` — PM `createBulk` call: add `'action_url' => '/flex-switch/approval-request'` and `'action_label' => 'View Requests'` to `$data`
-  - `cancelRequest()` — PM `createBulk` call: add `'action_url' => '/flex-switch/approval-request'` and `'action_label' => 'View Requests'` to `$data`
+  - `submitRequest()` — PM `createBulk` call: `'action_url'` and `'action_label'` already present in `$data` (no change needed)
+  - `cancelRequest()` — PM `createBulk` call: `'action_url'` and `'action_label'` already present in `$data` (no change needed)
 - **API**: No response shape changes
 - **Frontend**: No changes required — `notification-item.tsx` already renders the action button when `action_url` is present
 - **Migration**: None required — no schema changes
