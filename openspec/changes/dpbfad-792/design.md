@@ -4,40 +4,46 @@
 - **Path:** `bidding-api/src/Domain/Campaign/ActiveCampaign/Validator/BidValidator.php`
 - **Purpose:** Validate student bids during the Bidding phase.
 - **Changes:**
-  - **Cross-Round Duplicates:** Update `validateNoParallelRoundDuplicates(...)` to skip validation for bids with `bidType === 'backup'`. This allows students to select courses in backup that they have already submitted/selected in another parallel bidding round.
-  - **Submission Duplicates:** Update `validateNoDuplicates(...)` to allow selecting the same `courseId` multiple times only if they are different `classId`s AND at least one of them is a backup.
-  - **Time Conflicts:** (Already handled) Ensure `validateTimeConflicts()` continues to ignore backup bids when evaluating schedule overlaps.
+  - **Cross-Round Duplicates:** Updated `validateNoParallelRoundDuplicates(...)` to skip validation for bids with `bidType === 'backup'`. This allows students to select courses in backup that they have already submitted/selected in another parallel bidding round.
+  - **Submission Duplicates:** Updated `validateNoDuplicates(...)` to allow selecting the same `courseId` multiple times only if they are different `classId`s AND at least one of them is a backup.
+  - **Config Key Fix:** Corrected the configuration key from `min_bids_entire_round` to `min_capital_per_student` in `validateCapital()` to align with the actual campaign schema.
+  - **Audit Logging:** Integrated `AuditLogService` to log attempts at late submission when the bidding deadline has passed.
+  - **Time Conflicts:** Ensure `validateTimeConflicts()` continues to ignore backup bids when evaluating schedule overlaps.
 
 ### `BidRepository`
 - **Path:** `bidding-api/src/Repository/BidRepository.php`
 - **Purpose:** Provide database queries for `Bid` entities.
 - **Changes:**
-  - Add `findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` to retrieve course IDs that the student has placed bids on in other parallel bidding campaigns within the same program. Use `BidStatus::SELECTED` (not `BidStatus::SUBMITTED`, which does not exist in the enum) to filter for bids in the submitted/active state during the Bidding phase.
-  - Add `findDuplicateEnrolledCoursesByStudentAndCampaign()` to query same-campaign duplicate entries with optional `$moduleId` scoping.
-  - Fix incorrect DQL field reference `b.moduleId` → `b.campaignModule` in the exclude-module clause of `findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`. The `Bid` entity has no `moduleId` field; the correct association is `campaignModule`.
+  - Added `findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` to retrieve course IDs that the student has placed bids on in other parallel bidding campaigns within the same program. Used `BidStatus::SELECTED` (not `BidStatus::SUBMITTED`, which does not exist in the enum).
+  - Added `findDuplicateEnrolledCoursesByStudentAndCampaign()` to query same-campaign duplicate entries with optional `$moduleId` scoping.
+  - Fixed incorrect DQL field reference `b.moduleId` → `b.campaignModule`.
 
 ### `AddDropValidator`
 - **Path:** `bidding-api/src/Domain/Campaign/ActiveCampaign/Validator/AddDropValidator.php`
 - **Purpose:** Validates add/drop and waitlist requests before they are explicitly executed.
 - **Changes:**
-  - Introduce `validateNoUnresolvedDuplicateEnrollments(Student $student)` to check if the student has multiple ENROLLED/SELECTED bids for the same course in parallel bidding campaigns whose duplicates haven't been resolved with drops.
-  - Fix `validateNoDuplicateCoursesWithCurrentEnrollment` to block adding a course in Add/Drop 2 if the same course is selected in Add/Drop 1 but the module ID query didn't restrict them previously. Scope it better.
+  - Introduced `validateNoUnresolvedDuplicateEnrollments(Student $student)` to check if the student has multiple ENROLLED/SELECTED bids for the same course in parallel bidding campaigns whose duplicates haven't been resolved with drops.
+  - Fixed `validateNoDuplicateCoursesWithCurrentEnrollment` to block adding a course in Add/Drop 2 if the same course is selected in Add/Drop 1, with proper module scoping.
 
 ### `AddDropService`
 - **Path:** `bidding-api/src/Domain/Campaign/ActiveCampaign/AddDropService.php`
-- **Purpose:** Handles the business logic for the Add/Drop phase, including applying drops, additions, point refunds, and logging.
+- **Purpose:** Handles the business logic for the Add/Drop phase.
 - **Changes:**
-  - Add `getStudentFinancialSnapshot(Student $student)` for safe retrieval of points and capital.
-  - Uncomment/enable `validateBidPoints()` during submission.
-  - Update `findOneBy` queries fetching drop bids so they explicitly accept and filter by the active module ID (`$moduleId`), preventing cross-module drop accidents.
+  - Added `getStudentFinancialSnapshot(Student $student)` for safe retrieval of points and capital.
+  - Uncommented/enabled `validateBidPoints()` during submission.
+  - Updated `findOneBy` queries fetching drop bids to filter by the active module ID.
 
-### `bidding-web` (Frontend UI Blocking)
-- **Path:** `bidding-web/src/components/AddDrop/AddDropModal.tsx` (and related list components)
-- **Purpose:** Manage the course selection interface for students.
+### `bidding-web` (Frontend UI & Validation)
+- **Paths:** 
+  - `bidding-web/src/features/bidding/utils/validation.util.ts`
+  - `bidding-web/src/features/bidding/hooks/use-bidding-form.ts`
+  - `bidding-web/src/features/bidding/hooks/use-add-drop-waitlist-form.tsx`
+  - `bidding-web/src/features/bidding/hooks/use-course-options.ts`
 - **Changes:**
-  - Update the course selection list to check against the student's existing enrollments (already provided via initial state/API).
-  - Disable or hide "Add" buttons/checkboxes for courses the student is already enrolled in for this program.
-  - Provide a clear tooltip or visual indicator (e.g. "Already Enrolled") instead of allowing interaction and failing later with a toast error.
+  - **Robust Validation**: Expanded `validateCourseAddition` to accept the full `AvailableCourse` object. It now validates `is_enrolled` status and `unavailable_reason`.
+  - **UI Blocking**: The Add Courses dropdown now disables options for previously enrolled courses with a "Previously Enrolled" reason.
+  - **Proactive Feedback**: Integrated the updated validation into both `use-bidding-form.ts` and `use-add-drop-waitlist-form.tsx` to show toast notifications if a student tries to add an invalid course.
+  - **Stability**: Fixed a critical type mismatch in the form hooks where a credit number was passed to a function expecting a course object.
 
 ## State Management
 

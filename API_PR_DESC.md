@@ -73,6 +73,11 @@ In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could in
    - Updated `validateNoDuplicates()` to allow multiple sections of the same course as long as one of them is a backup.
    - Updated `validateNoParallelRoundDuplicates()` to skip verification for backup bids, allowing students to submit backups even if the course is already part of an active submission in another parallel round.
 
+10. **Refactor and Fix `BidValidator` Capital Logic**
+    - Corrected the configuration key from `min_bids_entire_round` to `min_capital_per_student` in `validateCapital()`. The previous key was mismatched with the actual campaign configuration.
+    - Simplified `validateCapital()` signature by removing unused `$moduleId` and `$student` parameters.
+    - Improved type safety by casting `bidPoints` to integer during summation.
+
 ## Impact & Behavioral Changes
 
 - **API response & Database Schema:** Unchanged.

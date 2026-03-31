@@ -29,7 +29,9 @@
 - [x] 4.4 Bidding cross-round duplicates: Add test scenarios to `BidValidatorTest` to cover parallel bidding duplicate submission prevention.
 - [x] 4.5 **Relax Backup Validation**: Update `BidValidator::validateNoDuplicates()` to allow same-course-different-section if one is a backup.
 - [x] 4.6 **Relax Backup Validation**: Skip `validateNoParallelRoundDuplicates()` for backup bids in `BidValidator.php`.
-- [x] 4.7 **UI Blocking**: Implement logic in `bidding-web` (`validation.util.ts` / `useAddDropWaitlistForm.tsx`) to disable selection for previously enrolled courses in the Add/Drop modal.
+- [x] 4.7 **UI Blocking**: Implement logic in `bidding-web` (`validation.util.ts`) to accept full course objects and validate `is_enrolled` and `unavailable_reason`.
+- [x] 4.8 **Audit Logging**: Add late submission logging via `AuditLogService` in `BidValidator.php`.
+- [x] 4.9 **Config Fix**: Corrected `min_capital_per_student` key mismatch in `BidValidator.php`.
 
 ## 5. Verification
 
@@ -41,7 +43,8 @@
 - [x] 5.6 Manually verify submitting a course in BIDDING1 restricts the same course submission in BIDDING2.
 - [x] 5.7 Fix `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`: replace undefined `BidStatus::SUBMITTED` with `BidStatus::SELECTED` to resolve 500 error.
 - [x] 5.8 Fix `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`: replace incorrect DQL field `b.moduleId` with `b.campaignModule`.
-- [ ] 5.9 Verify students can add the same course with different sections in backup.
-- [ ] 5.10 Verify no validation error for time conflicts with primary courses for backups.
-- [ ] 5.11 Verify no validation error for duplicate submission with previous bidding round for backups.
-- [ ] 5.12 Verify UI correctly blocks selection of previously enrolled courses.
+- [x] 5.9 Verify students can add the same course with different sections in backup.
+- [x] 5.10 Verify no validation error for time conflicts with primary courses for backups.
+- [x] 5.11 Verify no validation error for duplicate submission with previous bidding round for backups.
+- [x] 5.12 Verify UI correctly blocks selection of previously enrolled courses and shows toast notifications.
+- [x] 5.13 Verify build errors in `bidding-web` are resolved and type safety is enforced in `use-bidding-form.ts`.
