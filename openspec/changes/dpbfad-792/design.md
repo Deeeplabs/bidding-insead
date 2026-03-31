@@ -16,13 +16,15 @@
 - **Purpose:** Provide database queries for `Bid` entities.
 - **Changes:**
   - Fixed `findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` — replaced undefined `BidStatus::SUBMITTED` with `BidStatus::SELECTED` and incorrect DQL field `b.moduleId` with `b.campaignModule`. Note: This query is retained for Add/Drop phase duplicate checking only — it is no longer called during Bidding phase submission.
-  - Added `findDuplicateEnrolledCoursesByStudentAndCampaign()` to query same-campaign duplicate entries with optional `$moduleId` scoping.
+  - Added `findDuplicateEnrolledCoursesByStudentAndCampaign()` to query same-campaign duplicate entries with optional `$moduleId` scoping. **Waitlist Fix**: Removed module scoping for waitlist status, making it campaign-wide to ensure cross-module waitlist duplicates are detected.
+  - **`findEnrolledOrWaitlistedCourseIdsByStudentAndCampaign`**: Broadened to always return campaign-wide waitlists, even if a `$moduleId` is provided. This ensures the UI and backend correctly identify courses waitlisted in other phases as duplicates.
 
 ### `AddDropValidator`
 - **Path:** `bidding-api/src/Domain/Campaign/ActiveCampaign/Validator/AddDropValidator.php`
 - **Purpose:** Validates add/drop and waitlist requests before they are explicitly executed.
 - **Changes:**
   - Introduced `validateNoUnresolvedDuplicateEnrollments(Student $student)` to check if the student has multiple ENROLLED/SELECTED bids for the same course in parallel bidding campaigns whose duplicates haven't been resolved with drops.
+  - **Waitlist inclusion in duplicate checks**: `validateNoDuplicateCoursesInSubmission`, `validateNoPreviousEnrollment`, and `validateNoDuplicateCoursesWithCurrentEnrollment` now accept and validate the `$waitlist` array. This prevents students from waitlisting for courses they are already enrolled in or have already waitlisted for in other modules.
   - **`validateNoDuplicateCoursesWithCurrentEnrollment` — module-scoped drop exclusion fix**: The function now accepts an additional `?int $moduleId` parameter. When computing `$droppedCourseIds` (courses to exclude from the duplicate check), it ONLY excludes a course if the student has an ENROLLED or SELECTED bid for that class **in the current module** (`campaignModule = $moduleId`). This prevents a student from bypassing the cross-phase duplicate check by including a class from Add/Drop 1 in their Add/Drop 2 `drops` list.
   - `validateDrops` is NOT changed to be module-scoped — this remains intentionally campaign-wide so the validator correctly confirms the student has a droppable bid (regardless of which module it belongs to). The module scoping for actual drop execution remains in `AddDropService::executeCampaignAddDrop` (which filters by `campaignModule = $moduleId` when dropping). The duplicate-bypass gap is closed at the `validateNoDuplicateCoursesWithCurrentEnrollment` level, not at `validateDrops`.
 
@@ -33,6 +35,7 @@
   - Added `getStudentFinancialSnapshot(Student $student)` for safe retrieval of points and capital.
   - Uncommented/enabled `validateBidPoints()` during submission.
   - Updated `findOneBy` queries fetching drop bids to filter by the active module ID.
+  - **Waitlist Validation**: Updated all validator calls to pass the `$waitlist` array. Ensured validators are called even if only waitlist items are present in the submission.
   - **Pass `$moduleId` to `validateNoDuplicateCoursesWithCurrentEnrollment`** in Step 5c so that the drop exclusion inside that function is module-scoped. Previously this call passed no `$moduleId`, which allowed the cross-module drop bypass.
 
 ### `bidding-web` (Frontend UI — Add/Drop Dropdown Blocking)

@@ -48,21 +48,29 @@
 
 ## 6. Cross-Phase Add/Drop Duplicate — Targeted Verification
 
-- [ ] 6.12 Manually verify: student submits Finance 101 in Add/Drop 1 (moduleId=bid1) and then submits Finance 101 again in Add/Drop 2 (moduleId=bid2) → API returns 400 with "Already enrolled in course Finance 101 in this campaign."
-- [ ] 6.13 Manually verify: student submits Finance 101 Section EA in Add/Drop 1, then submits Finance 101 Section EB in Add/Drop 2 → API returns 400 (different section, same course, must still be rejected).
-- [ ] 6.14 Manually verify the cross-module drop bypass is blocked: student submits Add/Drop 2 with Finance 101 class from Add/Drop 1 in the drops list and Finance 101 Section EB in enrollments → still 400 (cross-module drop is not counted as a valid exclusion).
-- [ ] 6.15 Manually verify: drop-then-add Finance 101 EA → EB within the SAME module still works after the fix (moduleId in drops and enrollments match).
+- [x] 6.12 Manually verify: student submits Finance 101 in Add/Drop 1 (moduleId=bid1) and then submits Finance 101 again in Add/Drop 2 (moduleId=bid2) → API returns 400 with "Already enrolled in course Finance 101 in this campaign."
+- [x] 6.13 Manually verify: student submits Finance 101 Section EA in Add/Drop 1, then submits Finance 101 Section EB in Add/Drop 2 → API returns 400 (different section, same course, must still be rejected).
+- [x] 6.14 Manually verify the cross-module drop bypass is blocked: student submits Add/Drop 2 with Finance 101 class from Add/Drop 1 in the drops list and Finance 101 Section EB in enrollments → still 400 (cross-module drop is not counted as a valid exclusion).
+- [x] 6.15 Manually verify: drop-then-add Finance 101 EA → EB within the SAME module still works after the fix (moduleId in drops and enrollments match).
+- [x] 6.16 Manually verify waitlist duplicate: student waitlisted for Course A in Module 1, then attempts to waitlist for Course A in Module 2 → REJECTED with "Already waitlisted for this course in this campaign."
 
-## 7. Original Verification
+## 7. Waitlist Validation Implementation
 
-- [x] 6.1 Run PHPUnit tests covering `AddDropServiceNullSafetyTest.php` and `AddDropValidatorPreviousEnrollmentTest.php`.
-- [x] 6.2 Manually verify parallel bidding duplicate forces drop in Add/Drop.
-- [x] 6.3 Manually verify Add/Drop 1 course blocked in Add/Drop 2. (**REGRESSION** — fixed via tasks 2.7 & 2.8; `validateNoDuplicateCoursesWithCurrentEnrollment` now module-scoped; cross-module drop bypass closed)
-- [x] 6.4 Manually verify negative capital submission is blocked.
-- [x] 6.5 Manually verify dropping courses exclusively targets the submitted bidding round.
-- [x] 6.6 Manually verify students CAN submit the same course in BIDDING1 and BIDDING2 without error.
-- [x] 6.7 Verify students can add the same course with different sections in backup.
-- [x] 6.8 Verify no validation error for time conflicts with primary courses for backups.
-- [x] 6.9 Verify UI correctly disables previously enrolled courses in the Add/Drop dropdown (cannot be selected).
-- [x] 6.10 Verify UI shows "Previously Enrolled" label on disabled courses in Add/Drop dropdown.
-- [x] 6.11 Verify build errors in `bidding-web` are resolved and type safety is enforced.
+- [x] 7.1 Update `AddDropValidator` to include `$waitlist` array in `validateNoDuplicateCoursesInSubmission`, `validateNoPreviousEnrollment`, and `validateNoDuplicateCoursesWithCurrentEnrollment`.
+- [x] 7.2 Update `AddDropService::submitAddDrop` to pass `$waitlist` to validators and trigger validation for waitlist-only requests.
+- [x] 7.3 Broaden `BidRepository::findEnrolledOrWaitlistedCourseIdsByStudentAndCampaign` to return campaign-wide waitlists for cross-module duplicate detection.
+- [x] 7.4 Verify UI correctly disables courses waitlisted in other modules using the updated repository query.
+
+## 8. Original Verification
+
+- [x] 8.1 Run PHPUnit tests covering `AddDropServiceNullSafetyTest.php` and `AddDropValidatorPreviousEnrollmentTest.php`.
+- [x] 8.2 Manually verify parallel bidding duplicate forces drop in Add/Drop.
+- [x] 8.3 Manually verify Add/Drop 1 course blocked in Add/Drop 2. (**REGRESSION** — fixed via tasks 2.7 & 2.8; `validateNoDuplicateCoursesWithCurrentEnrollment` now module-scoped; cross-module drop bypass closed)
+- [x] 8.4 Manually verify negative capital submission is blocked.
+- [x] 8.5 Manually verify dropping courses exclusively targets the submitted bidding round.
+- [x] 8.6 Manually verify students CAN submit the same course in BIDDING1 and BIDDING2 without error.
+- [x] 8.7 Verify students can add the same course with different sections in backup.
+- [x] 8.8 Verify no validation error for time conflicts with primary courses for backups.
+- [x] 8.9 Verify UI correctly disables previously enrolled courses in the Add/Drop dropdown (cannot be selected).
+- [x] 8.10 Verify UI shows "Previously Enrolled" label on disabled courses in Add/Drop dropdown.
+- [x] 8.11 Verify build errors in `bidding-web` are resolved and type safety is enforced.

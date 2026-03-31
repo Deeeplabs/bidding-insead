@@ -20,8 +20,10 @@ In the Add/Drop & Waitlist phase, courses that students are already enrolled in 
 ### 6. Undefined BidStatus::SUBMITTED in Cross-Round Query
 `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` referenced `BidStatus::SUBMITTED`, which does not exist in the `BidStatus` enum. PHP throws a fatal `Error` for undefined enum cases before the null-coalescing (`??`) fallback can execute, resulting in a 500 Internal Server Error whenever a student attempts to submit bids during the Bidding phase.
 
-### 7. Incorrect DQL Field Reference `b.moduleId` in Cross-Round Query
-`BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` used `b.moduleId` in DQL, but the `Bid` entity has no field or association named `moduleId`. The correct Doctrine association field is `campaignModule` (mapped to column `campaign_module_id`). This caused a `[Semantical Error] line 0, col 200 near 'moduleId != '` on every bid submission when a student had a parallel module to exclude.
+### 8. Waitlist Validation Gap
+- `AddDropValidator` completely ignored the `$waitlist` array when checking for duplicate course enrollments (current campaign) or previous enrollments (programme history).
+- `BidRepository::findEnrolledOrWaitlistedCourseIdsByStudentAndCampaign` incorrectly filtered waitlisted courses by the current module, hiding cross-module waitlist duplicates.
+- `AddDropService` skipped duplicate/capital validation entirely if only waitlist items were submitted.
 
 ## What Changes
 
@@ -36,6 +38,7 @@ In the Add/Drop & Waitlist phase, courses that students are already enrolled in 
 9. **Relax backup selection validation**: Update `BidValidator` to remove conflict and duplicate submission restrictions specifically for backup courses. Allow students to select the same course with different sections in backup and remove time conflict validation for backup courses.
 10. **UI disabling for enrolled courses in Add/Drop dropdown**: Update the Add/Drop course selection dropdown in `bidding-web` to preemptively disable courses that the student is already enrolled in. Enrolled courses should appear disabled with a "Previously Enrolled" label, preventing selection at the UI level rather than showing an error after submission.
 11. **Add regression tests**: Cover duplicate course resolution, capital validation, null `studentData` behaviors, and the new relaxed backup logic.
+12. **Waitlist Duplicate Prevention**: Update `AddDropValidator` to include the `$waitlist` array in all duplicate and previous enrollment checks. Update `BidRepository` to return campaign-wide waitlists, ensuring the UI and backend correctly block courses already waitlisted in other modules.
 
 ## Capabilities
 

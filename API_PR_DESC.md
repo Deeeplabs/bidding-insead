@@ -3,7 +3,7 @@
 ## Summary
 Jira: 
 - https://insead.atlassian.net/browse/DPBFAD-792
-- https://insead.atlassian.net/browse/DPBFAD-851
+- https://insead.atlassian.net/browse/DPBFAD-896
 
 This PR addresses critical validation gaps and runtime crash risks across the Bidding and Add/Drop & Waitlist phases:
 1. Prevents `Call to a member function getRemainingCapital() on null` errors when a `StudentData` record is missing.
@@ -60,6 +60,7 @@ Previously, there was no cross-module evaluation of bids to prevent the same cou
 5. **Duplicate-course Guardrails (Documented & Tested)**
    - Rejects adding multiple sections of the same course within a single submission (same-request duplicate detection).
    - Campaign-scoped cross-phase duplicate prevention via `validateNoDuplicateCoursesWithCurrentEnrollment($moduleId)`: rejects adding a course already enrolled/waitlisted in the campaign across any module. Drop-exclusion is now module-scoped — a class in the `drops` list only exempts its course if the student has an ENROLLED or SELECTED bid for that class **in the current module** (`campaignModule = $moduleId`). This closes the bypass where a cross-module class in drops could incorrectly exclude a course from the duplicate check.
+   - **Waitlist Validation Gap Closed**: Updated `AddDropValidator` to include the `$waitlist` array in all duplicate and previous enrollment checks. Modified `BidRepository::findEnrolledOrWaitlistedCourseIdsByStudentAndCampaign` to return campaign-wide waitlists (removing module-level filtering for waitlist status). This ensures that students cannot bypass duplicate course rules by waitlisting for a course they are already involved with in another phase.
    - Added UI-level blocking via the `AddDropAvailableCourseDto` using `disabled_reason = 'already_enrolled_in_campaign'` and `'already_waitlisted_in_campaign'` for courses the student is already enrolled/waitlisted in within the current campaign (cross-module duplicate detection at the API response level).
 
 6. **Cross-Round Duplicate Prevention REMOVED from Bidding Phase (`BidValidator`)**

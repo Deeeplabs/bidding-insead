@@ -38,9 +38,7 @@ This PR improves the student experience during the Add/Drop & Waitlist phase by 
 
 ## Behavioral Summary
 
-| Context | Enrolled Courses | Same Course in Parallel Rounds | Same Course in Current Add/Drop |
-|---|---|---|---|
-| **Add/Drop Dropdown** | ❌ Disabled ("Previously Enrolled") | N/A | ❌ Disabled ("Already Enrolled" / "Already Waitlisted") |
+| **Add/Drop Dropdown** | ❌ Disabled ("Previously Enrolled") | N/A | ❌ Disabled ("Already Enrolled" / "Already Waitlisted in this campaign") |
 | **Bidding Dropdown** | ❌ Disabled ("Previously Enrolled") | ✅ Selectable | N/A |
 | **`validateCourseAddition()`** | ❌ Blocked (safety net) | N/A | ❌ Blocked (safety net) |
 
