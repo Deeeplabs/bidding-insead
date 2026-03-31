@@ -21,7 +21,9 @@ This issue is caused by a two-fold bug in the processing pipeline:
 
 ## Impact
 
-- **bidding-api**: `src/Helper/DateHelper.php` — Fix UTC conversion logic.
+- **bidding-api**: `src/Helper/DateHelper.php` — Fix UTC conversion logic and add robust parser.
+- **bidding-api**: `src/Domain/Campaign/Campaign/CampaignService.php` — Ensure UTC interpretation on save.
+- **bidding-api**: `src/Domain/Campaign/ActiveCampaign/Mapper/CampaignToModuleDetailDtoMapper.php` — Use robust parser for mapping.
 - **bidding-web**: `src/features/bidding/components/shared/bidding-card/CollapsePanelExtra.tsx` — Refactor to use `Date` objects.
 - **bidding-web**: `src/features/bidding/components/bid-submission/HeaderSection.tsx` — Refactor to use `Date` objects.
 - **Affected roles**: Students and Administrators.

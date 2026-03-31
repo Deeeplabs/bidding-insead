@@ -32,8 +32,10 @@ The solution is a coordinated fix to restore true UTC handling at both ends of t
 ## Affected Files Summary
 | File Path | Impact | Rationale |
 |-----------|--------|-----------|
-| `bidding-api/src/Helper/DateHelper.php` | Backend | Fix UTC conversion in `toIso` |
-| `bidding-api/src/Controller/Api/Student/Campaign/StudentActiveCampaignController.php` | Backend | Use `toIso` for consistency |
+| `bidding-api/src/Helper/DateHelper.php` | Backend | Fix UTC conversion in `toIso` and add `parse()` |
+| `bidding-api/src/Controller/Api/Student/Campaign/StudentActiveCampaignController.php` | Backend | Use `toIso` and `parse()` for consistency |
+| `bidding-api/src/Domain/Campaign/Campaign/CampaignService.php` | Backend | Ensure UTC alignment on campaign save |
+| `bidding-api/src/Domain/Campaign/ActiveCampaign/Mapper/CampaignToModuleDetailDtoMapper.php` | Backend | Use `DateHelper::parse()` for ISO string support |
 | `bidding-web/src/features/bidding/components/shared/bidding-card/CollapsePanelExtra.tsx` | Frontend | Maintain `Date` objects |
 | `bidding-web/src/features/bidding/components/bid-submission/HeaderSection.tsx` | Frontend | Maintain `Date` objects |
 

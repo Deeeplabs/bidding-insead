@@ -10,11 +10,19 @@ The Student Portal was displaying incorrect times (8-hour shift and DST-related 
 
 ### 1. `bidding-api/src/Helper/DateHelper.php`
 - Refactored `toIso()` to perform an explicit conversion to UTC before formatting with the `Z` suffix.
+- Added `DateHelper::parse()` to robustly handle both ISO strings (with Z/offset) and MySQL naive strings, ensuring all date inputs are interpreted as UTC.
 - Handles both `\DateTime` and `\DateTimeImmutable` objects correctly.
 
 ### 2. `bidding-api/src/Controller/Api/Student/Campaign/StudentActiveCampaignController.php`
 - Replaced manual `.format('Y-m-d H:i:s')` calls for campaign deadlines with `DateHelper::toIso()`.
 - Standardized the API output for all student portal endpoints to ensure true ISO-8601 UTC strings are sent to the frontend.
+
+### 3. `bidding-api/src/Domain/Campaign/Campaign/CampaignService.php`
+- Updated `saveWithModules()` to use `DateHelper::parse()` when persisting dates from `module_config`. This ensures that even if the PM's browser or the backend server is in a local timezone, the dates are stored correctly in the database as UTC.
+- Removed legacy `new \DateTime()` calls that were vulnerable to local server timezone offsets.
+
+### 4. `bidding-api/src/Domain/Campaign/ActiveCampaign/Mapper/CampaignToModuleDetailDtoMapper.php`
+- Replaced `createFromFormat` with `DateHelper::parse()` to correctly handle both ISO strings (with Z) and MySQL strings. This fixes the parsing failures that caused incorrect phase status (Open/Closed) and broken countdowns.
 
 ## Impact
 - **No Migrations**: This change affects only the presentation layer of the API.
