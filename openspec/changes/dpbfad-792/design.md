@@ -11,6 +11,12 @@
   - **Config Key Fix:** Corrected the configuration key from `min_bids_entire_round` to `min_capital_per_student` in `validateCapital()` to align with the actual campaign schema.
   - **Audit Logging:** Integrated `AuditLogService` to log attempts at late submission when the bidding deadline has passed.
 
+### `StudentActiveCampaignController`
+- **Path:** `bidding-api/src/Controller/Api/Student/Campaign/StudentActiveCampaignController.php`
+- **Purpose:** Serves the `/student/active-campaigns/{id}/bidding/{moduleId}/available` endpoint used by the bidding dropdown.
+- **Changes:**
+  - **Fix `is_enrolled` flag for parallel bidding rounds**: In `getAvailableCourses()`, the `$allEnrolledCourseIds` query (line 681-683) currently calls `findEnrolledCourseIdsByStudentAndProgram($student, $program)` **without** excluding the current campaign. This causes courses with `SELECTED` bids in the same campaign's other modules (e.g., bidding round 1) to have `is_enrolled = true` in the API response. The frontend then disables them as "Previously Enrolled" in bidding round 2. **Fix**: Pass `$campaign` as the third argument to also exclude the current campaign — aligning `$allEnrolledCourseIds` with `$previouslyEnrolledCourseIds`. This ensures only courses from **prior campaigns** are flagged as enrolled, while courses from parallel bidding rounds in the same campaign remain selectable.
+
 ### `BidRepository`
 - **Path:** `bidding-api/src/Repository/BidRepository.php`
 - **Purpose:** Provide database queries for `Bid` entities.

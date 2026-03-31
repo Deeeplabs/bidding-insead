@@ -25,6 +25,9 @@ In the Add/Drop & Waitlist phase, courses that students are already enrolled in 
 - `BidRepository::findEnrolledOrWaitlistedCourseIdsByStudentAndCampaign` incorrectly filtered waitlisted courses by the current module, hiding cross-module waitlist duplicates.
 - `AddDropService` skipped duplicate/capital validation entirely if only waitlist items were submitted.
 
+### 9. Bidding Dropdown Incorrectly Marks Courses as "Previously Enrolled" Across Parallel Rounds
+In the Bidding phase, the `getAvailableCourses()` endpoint in `StudentActiveCampaignController` computes two course-ID lists: `$previouslyEnrolledCourseIds` (excludes the current campaign) and `$allEnrolledCourseIds` (includes ALL campaigns, no exclusion). The `is_enrolled` flag on each `AvailableCourseDto` is set from the second, unfiltered list. Because courses bid on in Bidding Round 1 (module 5856) have `SELECTED` status in the same campaign (987), they appear in `$allEnrolledCourseIds` when the student opens Bidding Round 2 (module 5860). The frontend's `getUnavailableReason()` then treats `is_enrolled = true` as "Previously Enrolled", disabling those courses in the dropdown — even though they are in the current campaign and should be freely selectable across parallel rounds.
+
 ## What Changes
 
 1. **Force resolution of parallel bidding duplicates in Add/Drop**: Before processing any add/drop submission, detect if the student has multiple ENROLLED/SELECTED bids for the same course. If unresolved duplicates exist and the student's drops don't resolve them, reject the submission.
@@ -37,8 +40,9 @@ In the Add/Drop & Waitlist phase, courses that students are already enrolled in 
 8. **Fix incorrect DQL field `b.moduleId`**: Replace `b.moduleId` with `b.campaignModule` in `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` to resolve `[Semantical Error]` caused by referencing a non-existent field on the `Bid` entity.
 9. **Relax backup selection validation**: Update `BidValidator` to remove conflict and duplicate submission restrictions specifically for backup courses. Allow students to select the same course with different sections in backup and remove time conflict validation for backup courses.
 10. **UI disabling for enrolled courses in Add/Drop dropdown**: Update the Add/Drop course selection dropdown in `bidding-web` to preemptively disable courses that the student is already enrolled in. Enrolled courses should appear disabled with a "Previously Enrolled" label, preventing selection at the UI level rather than showing an error after submission.
-11. **Add regression tests**: Cover duplicate course resolution, capital validation, null `studentData` behaviors, and the new relaxed backup logic.
-12. **Waitlist Duplicate Prevention**: Update `AddDropValidator` to include the `$waitlist` array in all duplicate and previous enrollment checks. Update `BidRepository` to return campaign-wide waitlists, ensuring the UI and backend correctly block courses already waitlisted in other modules.
+11. **Fix bidding dropdown `is_enrolled` flag**: In `StudentActiveCampaignController::getAvailableCourses()`, pass `$campaign` as the exclusion parameter to the `$allEnrolledCourseIds` query so that courses from the current campaign (including parallel bidding modules) are not flagged as `is_enrolled`. This aligns the `is_enrolled` flag with `$previouslyEnrolledCourseIds`, ensuring only courses from prior campaigns are marked as "Previously Enrolled" in the bidding dropdown.
+12. **Add regression tests**: Cover duplicate course resolution, capital validation, null `studentData` behaviors, and the new relaxed backup logic.
+13. **Waitlist Duplicate Prevention**: Update `AddDropValidator` to include the `$waitlist` array in all duplicate and previous enrollment checks. Update `BidRepository` to return campaign-wide waitlists, ensuring the UI and backend correctly block courses already waitlisted in other modules.
 
 ## Capabilities
 

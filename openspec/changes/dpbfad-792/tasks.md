@@ -61,6 +61,12 @@
 - [x] 7.3 Broaden `BidRepository::findEnrolledOrWaitlistedCourseIdsByStudentAndCampaign` to return campaign-wide waitlists for cross-module duplicate detection.
 - [x] 7.4 Verify UI correctly disables courses waitlisted in other modules using the updated repository query.
 
+## 9. Fix Bidding Dropdown `is_enrolled` Flag for Parallel Rounds
+
+- [x] 9.1 In `StudentActiveCampaignController::getAvailableCourses()` (line 681-683), pass `$campaign` as the third argument to `findEnrolledCourseIdsByStudentAndProgram()` for the `$allEnrolledCourseIds` query. This excludes the current campaign so that courses bid on in parallel bidding modules are not flagged as `is_enrolled = true`.
+- [ ] 9.2 Manually verify: student submits bids for 'Art of Why' and 'Blue Ocean Strategy' in BIDDING1 (moduleId=5856), then opens BIDDING2 (moduleId=5860) → those courses are NOT shown as "Previously Enrolled" in the dropdown and can be freely selected.
+- [ ] 9.3 Manually verify: courses genuinely enrolled from a PRIOR campaign still show as "Previously Enrolled" in both BIDDING1 and BIDDING2 dropdowns.
+
 ## 8. Original Verification
 
 - [x] 8.1 Run PHPUnit tests covering `AddDropServiceNullSafetyTest.php` and `AddDropValidatorPreviousEnrollmentTest.php`.

@@ -14,6 +14,7 @@ This PR addresses critical validation gaps and runtime crash risks across the Bi
 6. Fixes a fatal error caused by referencing the undefined `BidStatus::SUBMITTED` enum case in the cross-round duplicate query, which caused a 500 Internal Server Error on every bid submission.
 7. Fixes a Doctrine `[Semantical Error]` caused by referencing non-existent `b.moduleId` DQL field instead of the correct `b.campaignModule` association in the cross-round duplicate query.
 8. Relaxes backup selection validation to allow students more flexibility when picking alternative courses.
+9. Fixes the bidding dropdown incorrectly marking courses as "Previously Enrolled" across parallel bidding rounds — courses bid on in BIDDING1 were blocked in the BIDDING2 dropdown due to the `is_enrolled` flag including same-campaign bids.
 
 ## Problem Context
 
@@ -36,6 +37,9 @@ Previously, there was no cross-module evaluation of bids to prevent the same cou
 
 ### 6. Incorrect DQL Field Reference `b.moduleId` in Cross-Round Query
 `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` used `b.moduleId` in the DQL `andWhere` clause, but the `Bid` entity has no field or association named `moduleId`. The correct Doctrine association field is `campaignModule` (mapped to column `campaign_module_id`). This caused a `[Semantical Error] line 0, col 200 near 'moduleId != '` on every bid submission when a parallel module exclusion was applied.
+
+### 7. Bidding Dropdown `is_enrolled` Flag Incorrectly Set for Parallel Rounds
+In `StudentActiveCampaignController::getAvailableCourses()`, the `$allEnrolledCourseIds` query called `findEnrolledCourseIdsByStudentAndProgram($student, $program)` **without** excluding the current campaign. This caused the `is_enrolled` flag to be set to `true` for courses with `SELECTED` bids in the same campaign's other bidding modules. The frontend's `getUnavailableReason()` treated `is_enrolled = true` as "Previously Enrolled", disabling those courses in the bidding round 2 dropdown — even though students should be free to bid on the same courses across parallel rounds.
 
 ## What Changed
 
@@ -79,7 +83,13 @@ Previously, there was no cross-module evaluation of bids to prevent the same cou
    - `validateTimeConflicts()` continues to skip backup bids when evaluating schedule overlaps.
    - `validateNoPreviousEnrollment()` remains enforced — students still cannot bid on previously enrolled courses from prior campaigns.
 
-10. **Refactor and Fix `BidValidator` Capital Logic**
+10. **Fix bidding dropdown `is_enrolled` flag for parallel rounds (`StudentActiveCampaignController`)**
+    - In `getAvailableCourses()`, the `$allEnrolledCourseIds` query now passes `$campaign` as the exclusion parameter (matching `$previouslyEnrolledCourseIds`).
+    - Previously, `$allEnrolledCourseIds` included courses from ALL campaigns (no exclusion), causing courses with `SELECTED` bids in the same campaign's other modules (e.g., BIDDING1) to have `is_enrolled = true` when viewing BIDDING2.
+    - The frontend's `getUnavailableReason()` in `validation.util.ts` treats `is_enrolled = true` as "Previously Enrolled", disabling those courses in the dropdown.
+    - With this fix, only courses from **prior campaigns** are flagged as `is_enrolled`, while courses from parallel bidding rounds in the same campaign remain freely selectable.
+
+11. **Refactor and Fix `BidValidator` Capital Logic**
     - Corrected the configuration key from `min_bids_entire_round` to `min_capital_per_student` in `validateCapital()`. The previous key was mismatched with the actual campaign configuration.
     - Simplified `validateCapital()` signature by removing unused `$moduleId` and `$student` parameters.
     - Improved type safety by casting `bidPoints` to integer during summation.
@@ -120,4 +130,6 @@ Previously, there was no cross-module evaluation of bids to prevent the same cou
 - [x] Verified backup flexibility: students can now add the same course in different sections if one is marked as backup.
 - [x] Verified cross-round duplicate prevention is removed: students CAN submit the same course in BIDDING1 and BIDDING2 without error.
 - [x] Verified previously enrolled course blocking remains in the bidding phase.
+- [ ] Verified bidding dropdown fix: courses bid on in BIDDING1 (e.g., 'Art of Why', 'Blue Ocean Strategy') are NOT shown as "Previously Enrolled" in the BIDDING2 dropdown.
+- [ ] Verified courses genuinely enrolled from a prior campaign still show as "Previously Enrolled" in both BIDDING1 and BIDDING2 dropdowns.
 - [x] Regression fixed: Add/Drop 1 course now correctly blocked in Add/Drop 2 even when a cross-module class is included in the `drops` list — `validateNoDuplicateCoursesWithCurrentEnrollment()` now requires a matching enrolled bid in the current module before honoring a drop exclusion.
