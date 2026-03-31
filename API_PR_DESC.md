@@ -9,6 +9,7 @@ This PR addresses critical validation gaps and runtime crash risks across the Bi
 3. Enables strict capital (bid points) validation which was previously bypassed, blocking negative capital submissions.
 4. Aligns and documents existing duplicate-course validation guardrails (cross-module and same-request duplicates) with robust test coverage.
 5. Introduces strict validation during the active Bidding phase to prevent students from submitting bids for the same exact course across multiple active parallel bidding rounds (e.g., BIDDING1 and BIDDING2).
+6. Fixes a fatal error caused by referencing the undefined `BidStatus::SUBMITTED` enum case in the cross-round duplicate query, which caused a 500 Internal Server Error on every bid submission.
 
 ## Problem Context
 
@@ -23,6 +24,9 @@ In parallel bidding campaigns (multiple modules), students can legitimately end 
 
 ### 4. Direct Duplicate Submission in Parallel Bidding Modules
 In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could independently submit bids for the identical course in both modules. There was no cross-module evaluation of open bids to halt duplicate course selections until after bids were computed to enrollments.
+
+### 5. Undefined BidStatus::SUBMITTED in Cross-Round Query
+`BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` referenced `BidStatus::SUBMITTED`, which does not exist in the `BidStatus` enum. PHP throws a fatal `Error` for undefined enum cases before the null-coalescing (`??`) fallback can execute, resulting in a 500 Internal Server Error whenever a student attempts to submit bids during the Bidding phase.
 
 ## What Changed
 
@@ -52,6 +56,9 @@ In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could in
    - Implemented `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` to query for courses actively bidded on in parallel bidding round modules.
    - Added `BidValidator::validateNoParallelRoundDuplicates()` evaluating prior PENDING selections to robustly block users from placing new requests on duplicated courses during the immediate Bidding Phase.
 
+7. **Fix undefined `BidStatus::SUBMITTED` enum reference**
+   - Replaced `BidStatus::SUBMITTED` with `BidStatus::PENDING` in `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`. The `BidStatus` enum has no `SUBMITTED` case; bids during the Bidding phase are stored with status `PENDING` (value `10`). The previous code caused a fatal PHP `Error` on every bid submission attempt.
+
 ## Impact & Behavioral Changes
 
 - **API response & Database Schema:** Unchanged.
@@ -74,3 +81,4 @@ In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could in
 
 - [x] All entry point controllers verified conceptually.
 - [x] PHPUnit suite tests run and passed cleanly.
+- [x] Fix verified: `BidStatus::SUBMITTED` reference removed, replaced with `BidStatus::PENDING` — bid submissions no longer produce 500 errors.

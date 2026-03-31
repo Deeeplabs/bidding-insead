@@ -8,7 +8,7 @@
 ### `BidRepository`
 - **Path:** `bidding-api/src/Repository/BidRepository.php`
 - **Purpose:** Provide database queries for `Bid` entities.
-- **Changes:** Add a custom query method (e.g., `findSubmittedCourseIdsInParallelRoundsByStudentAndProgram`) to retrieve course IDs that the student has placed bids on in other parallel bidding campaigns within the same program.
+- **Changes:** Add a custom query method (`findSubmittedCourseIdsInParallelRoundsByStudentAndProgram`) to retrieve course IDs that the student has placed bids on in other parallel bidding campaigns within the same program. Use `BidStatus::PENDING` (not `BidStatus::SUBMITTED`, which does not exist in the enum) to filter for bids in the submitted/active state during the Bidding phase.
 
 ### `AddDropValidator`
 - **Path:** `bidding-api/src/Domain/Campaign/ActiveCampaign/Validator/AddDropValidator.php`

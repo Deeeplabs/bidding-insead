@@ -23,7 +23,7 @@
 
 ## 4. Parallel Bidding Submission Validation (New)
 
-- [x] 4.1 Provide new query `findSubmittedCourseIdsInParallelRoundsByStudentAndProgram` in `bidding-api/src/Repository/BidRepository.php` to fetch course IDs that the given student has submitted across currently running parallel bidding rounds in the current Program (excluding the current module ID).
+- [x] 4.1 Provide new query `findSubmittedCourseIdsInParallelRoundsByStudentAndProgram` in `bidding-api/src/Repository/BidRepository.php` to fetch course IDs that the given student has submitted across currently running parallel bidding rounds in the current Program (excluding the current module ID). Use `BidStatus::PENDING` to filter submitted bids (not `BidStatus::SUBMITTED` which does not exist in the enum).
 - [x] 4.2 Add `validateNoParallelRoundDuplicates(array $newBids, Student $student, Campaign $campaign, int $activeModuleId)` to `bidding-api/src/Domain/Campaign/ActiveCampaign/Validator/BidValidator.php`.
 - [x] 4.3 Invoke `validateNoParallelRoundDuplicates()` from within `BidValidator->validate()` to reject the overall bid submission if cross-round duplicates are detected.
 - [x] 4.4 Bidding cross-round duplicates: Add test scenarios to `BidValidatorTest` to cover parallel bidding duplicate submission prevention.
@@ -36,3 +36,4 @@
 - [x] 5.4 Manually verify negative capital submission is blocked.
 - [x] 5.5 Manually verify dropping courses exclusively targets the submitted bidding round via QA video assessment.
 - [x] 5.6 Manually verify submitting a course in BIDDING1 restricts the same course submission in BIDDING2.
+- [x] 5.7 Fix `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`: replace undefined `BidStatus::SUBMITTED` with `BidStatus::PENDING` to resolve 500 Internal Server Error on bid submission.

@@ -18,6 +18,9 @@ Dropping courses in one parallel bidding round (e.g., `bid2`) erroneously target
 ### 5. Duplicate Submission in Parallel Bidding Rounds
 Users are able to submit bids for the same exact course across multiple parallel bidding rounds (e.g., BIDDING1 and BIDDING2) during the Bidding phase. There's no cross-round validation to prevent a user from selecting a course in BIDDING2 that they have already submitted/selected in BIDDING1.
 
+### 6. Undefined BidStatus::SUBMITTED Reference in Cross-Round Query
+`BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` referenced `BidStatus::SUBMITTED`, which does not exist in the `BidStatus` enum. PHP throws a fatal `Error` for undefined enum cases (the `??` fallback operator never executes), causing a 500 Internal Server Error whenever a student attempts to submit bids. The correct status for submitted bids during the Bidding phase is `BidStatus::PENDING`.
+
 ## What Changes
 
 1. **Force resolution of parallel bidding duplicates**: Before processing any add/drop submission, detect if the student has multiple ENROLLED/SELECTED bids for the same course. If unresolved duplicates exist and the student's drops don't resolve them, reject the submission.
@@ -26,7 +29,8 @@ Users are able to submit bids for the same exact course across multiple parallel
 4. **Add null-safe financial snapshot handling**: Introduce `getStudentFinancialSnapshot(Student $student)` in `AddDropService` to safely read credits/capital with defaults. Use this snapshot for response calculations and audit logs. Harden `validateBidPoints()` to read capital via null-safe access.
 5. **Isolate drop operations by module**: Pass `$moduleId` into `findOneBy()` queries within `AddDropService` and `AddDropValidator` to guarantee drops, responses, and capital refunds strictly affect the active module.
 6. **Cross-round Bidding duplicate prevention**: Add validation in `BidValidator` during the Bidding phase to retrieve the student's bids in parallel rounds (using a new query in `BidRepository`) and throw an exception if they are trying to bid on a course they already bidded on.
-7. **Add regression tests**: Cover duplicate course resolution, capital validation, null `studentData` behaviors, and cross-round Bidding duplicates.
+7. **Fix BidStatus::SUBMITTED reference**: Replace the undefined `BidStatus::SUBMITTED` enum case with `BidStatus::PENDING` in `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` to resolve the 500 error on bid submission.
+8. **Add regression tests**: Cover duplicate course resolution, capital validation, null `studentData` behaviors, and cross-round Bidding duplicates.
 
 ## Capabilities
 

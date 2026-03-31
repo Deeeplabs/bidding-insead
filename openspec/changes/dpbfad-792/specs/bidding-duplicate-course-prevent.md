@@ -17,3 +17,4 @@ Prevent users from submitting bids for the same exact course across multiple par
 
 ## Notes
 - Needs regression tests for cross-round duplicate bidding submissions.
+- The `BidStatus` enum does not have a `SUBMITTED` case. Bids in the Bidding phase are stored with `BidStatus::PENDING` (value `10`). Any query filtering for submitted bids must use `BidStatus::PENDING`, not `BidStatus::SUBMITTED`.
