@@ -1,51 +1,42 @@
-## Current Implementation Root Cause
+## Root Cause Analysis
 
-In `bidding-web`, the `CollapsePanelExtra` and `HeaderSection` components follow a data handling pattern that introduces a double-parsing error:
-1. `parseUtc(date_from_api)` -> Returns a `Date` object in UTC.
-2. `useDate().format(date, 'yyyy-MM-dd HH:mm:ss')` -> Returns a local time string *without* timezone info (e.g., `"2026-03-27 01:20:00"` for SGT).
-3. This local string is passed to `getPhaseStatus` and `getPhaseDisplayText`.
-4. These utilities call `parseUtc()` on the input string.
-5. `parseUtc()` interprets strings without timezone info as UTC and appends 'Z' -> `2026-03-27T01:20:00Z`.
-6. Final rendering using `useDate().format()` adds the timezone offset *again* (e.g., +8 for SGT), resulting in `09:20:00 SGT` instead of the original `01:20:00 SGT`.
+The current time display shift is caused by a failure to maintain a true UTC "Source of Truth" through the API:
+
+### 1. Backend: "Fake UTC" Strings
+In `bidding-api/src/Helper/DateHelper.php`, the `toIso` method was defined as:
+```php
+return $date->format('Y-m-d\TH:i:s.000\Z');
+```
+This appends a `Z` suffix manually without converting the `DateTime` object to the UTC timezone first. If the server is in a local timezone (e.g., Paris or SGT), the resulting string is a "Fake UTC" string (e.g., `"2026-03-27T01:20:00Z"` when 1:20 was actually the local time).
+
+### 2. Frontend: Double-Parsing Error
+In `bidding-web`, components followed this pattern:
+1. `parseUtc(date_from_api)` -> Correct `Date` object (assuming API was true UTC).
+2. `useDate().format(date)` -> Local string without TZ (e.g., `"2026-03-27 01:20:00"`).
+3. Passed to utilities that call `parseUtc()` again.
+4. `parseUtc()` interprets non-suffixed strings as UTC -> `2026-03-27T01:20:00Z`.
+5. Final rendering adds local offset *again*, resulting in an 8-hour shift.
 
 ## Proposed Design
 
-The solution is to maintain the date as a `Date` object (or an ISO string with timezone context) throughout the processing pipeline and only format it for final display in the UI.
+The solution is a coordinated fix to restore true UTC handling at both ends of the pipeline.
 
-### Component Refactor: `CollapsePanelExtra.tsx`
-- **Location**: `src/features/bidding/components/shared/bidding-card/CollapsePanelExtra.tsx`
-- **Change**: Replace premature string formatting with direct `Date` objects returned by `parseUtc`.
-```typescript
-// From:
-const parsedStartDate = format(parseUtc(startDate), 'yyyy-MM-dd HH:mm:ss');
-const parsedEndDate = format(parseUtc(endDate), 'yyyy-MM-dd HH:mm:ss');
+### Backend Refactor: `DateHelper.php`
+- Convert all `DateTimeInterface` objects to `UTC` before formatting with the `Z` suffix.
+- Ensure that `StudentActiveCampaignController` and other student-facing controllers use `toIso()` instead of manual `.format('Y-m-d H:i:s')`.
 
-// To:
-const parsedStartDate = parseUtc(startDate);
-const parsedEndDate = parseUtc(endDate);
-```
-- Since `getPhaseStatus` and `getPhaseDisplayText` already call `parseUtc` internally (which is idempotent for `Date` objects), this fix is backward-compatible with the utility's signature.
+### Frontend Refactor: Maintaining `Date` Context
+- In `CollapsePanelExtra.tsx` and `HeaderSection.tsx`, maintain the `Date` object returned by the initial `parseUtc` call.
+- Pass the `Date` object directly to `getPhaseStatus` and `getPhaseDisplayText`, avoiding any intermediate string formatting that loses timezone context.
 
-### Component Refactor: `HeaderSection.tsx`
-- **Location**: `src/features/bidding/components/bid-submission/HeaderSection.tsx`
-- **Change**: Similarly refactor lines 58-59 to avoid string loss of timezone context.
-```typescript
-// From:
-const parsedStartDate = format(parseUtc(startDate), 'yyyy-MM-dd HH:mm:ss');
-const parsedEndDate = format(parseUtc(endDate), 'yyyy-MM-dd HH:mm:ss');
+## Affected Files Summary
+| File Path | Impact | Rationale |
+|-----------|--------|-----------|
+| `bidding-api/src/Helper/DateHelper.php` | Backend | Fix UTC conversion in `toIso` |
+| `bidding-api/src/Controller/Api/Student/Campaign/StudentActiveCampaignController.php` | Backend | Use `toIso` for consistency |
+| `bidding-web/src/features/bidding/components/shared/bidding-card/CollapsePanelExtra.tsx` | Frontend | Maintain `Date` objects |
+| `bidding-web/src/features/bidding/components/bid-submission/HeaderSection.tsx` | Frontend | Maintain `Date` objects |
 
-// To:
-const parsedStartDate = parseUtc(startDate);
-const parsedEndDate = parseUtc(endDate);
-```
-
-### Affected Files Summary
-| File Path | Impact |
-|-----------|--------|
-| `src/features/bidding/components/shared/bidding-card/CollapsePanelExtra.tsx` | Refactor date parsing logic |
-| `src/features/bidding/components/bid-submission/HeaderSection.tsx` | Refactor date parsing logic |
-
-## Risk Assessment & Safety
-- **No API impact**: This is a purely frontend display fix.
-- **No data risk**: Business logic calculations (which should use UTC) are not affected, only UI display strings.
-- **Regression**: Check if other components use this intermediate formatting pattern. `getPhaseStatus` and `getPhaseDisplayText` are specifically affected because they "re-parse" the input.
+## Risk Assessment
+- **Zero-Shift Migration**: Since the backend now returns true UTC, all frontend components already using the (now correct) UTC strings will display correctly.
+- **Backward Compatibility**: `parseUtc` is idempotent for `Date` objects, so passing objects instead of strings is safe.

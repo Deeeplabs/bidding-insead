@@ -2,33 +2,28 @@
 
 The Student Portal (`bidding-web`) incorrectly displays bidding round closing and opening times, causing an 8-hour shift for users in the SGT (GMT+8) timezone. For instance, a round scheduled to close at 1:20 AM SGT is displayed as closing at 9:20 AM SGT.
 
-This issue is caused by a double-parsing bug in the frontend components:
-1. Components (`CollapsePanelExtra` and `HeaderSection`) parse the UTC date string from the API into a `Date` object using `parseUtc`.
-2. They then format this `Date` object into a local time string (e.g., `"2026-03-27 09:20:00"`) *without* timezone information using `useDate().format`.
-3. This local string is then passed to phase display utilities (`getPhaseStatus`, `getPhaseDisplayText`) that call `parseUtc` again.
-4. `parseUtc` interprets strings without timezone info as UTC, incorrectly shifting the time by the user's timezone offset a second time during formatting.
+This issue is caused by a two-fold bug in the processing pipeline:
+1. **Backend "Fake UTC" Issue**: `DateHelper::toIso` in `bidding-api` was formatting dates as ISO strings with a `Z` suffix but *without* converting them to UTC first. This meant local server times (e.g., Paris or SGT) were being incorrectly presented as true UTC.
+2. **Double-Parsing Bug (Frontend)**: Components (`CollapsePanelExtra` and `HeaderSection`) in `bidding-web` were stripping timezone context during intermediate formatting, then re-parsing these local strings as UTC, adding the offset a second time.
 
 ## What Changes
 
-- **Fix `CollapsePanelExtra.tsx`**: Refactor the component to pass the `Date` objects returned by `parseUtc` directly to the phase status and display utilities, rather than intermediate formatted strings.
-- **Fix `HeaderSection.tsx`**: Apply the same refactor to avoid premature string conversion that loses timezone context.
-- **Maintain UTC Source of Truth**: Ensure all date-dependent calculations in `bidding-web` leverage the `Date` objects directly until the final rendering step.
+- **Fix `DateHelper.php` (Backend)**: Refactor to convert all `DateTimeInterface` objects to UTC before applying the `Z` suffix.
+- **Fix Student API (Backend)**: Standardize date fields in student-facing controllers to use `DateHelper::toIso()` instead of manual formatting.
+- **Fix `CollapsePanelExtra.tsx` (Frontend)**: Refactor to pass `Date` objects directly to phase utilities, avoiding timezone-stripping formatting.
+- **Fix `HeaderSection.tsx` (Frontend)**: Similarly refactor to maintain `Date` context throughout the display pipeline.
 
 ## Capabilities
 
-### New Capabilities
-
-_(none — this is a fix for existing time display logic)_
-
 ### Modified Capabilities
 
-- **Accurate Bidding Round Status**: Students now see the correct local times for bidding round starts and ends, aligned with the PM's configuration and the backend source of truth.
+- **Accurate Bidding Round Status**: Students now see the correct local times for bidding round starts and ends, aligned with the PM's configuration across all server regions.
 
 ## Impact
 
-- **bidding-web**: `src/features/bidding/components/shared/bidding-card/CollapsePanelExtra.tsx` — Refactor to use `Date` objects for `parsedStartDate` and `parsedEndDate` to avoid double-parsing shifts.
-- **bidding-web**: `src/features/bidding/components/bid-submission/HeaderSection.tsx` — Refactor to use `Date` objects for `parsedStartDate` and `parsedEndDate`.
-- **Affected roles**: Students.
-- **No API changes required**: Backend already returns correct UTC date-time values.
+- **bidding-api**: `src/Helper/DateHelper.php` — Fix UTC conversion logic.
+- **bidding-web**: `src/features/bidding/components/shared/bidding-card/CollapsePanelExtra.tsx` — Refactor to use `Date` objects.
+- **bidding-web**: `src/features/bidding/components/bid-submission/HeaderSection.tsx` — Refactor to use `Date` objects.
+- **Affected roles**: Students and Administrators.
 - **No migration required**: No database schema changes.
 - **No regression risk**: Fixing the parsing logic restores intended behavior for all timezones.

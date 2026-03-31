@@ -1,23 +1,24 @@
-## Implementation: `bidding-web`
+## Implementation: `bidding-api` (Backend)
 
-- [x] **Task 1: Refactor `CollapsePanelExtra.tsx`**
-  - [x] Locate `src/features/bidding/components/shared/bidding-card/CollapsePanelExtra.tsx`.
-  - [x] Modify lines 25-26 to use `parseUtc` directly for `parsedStartDate` and `parsedEndDate`.
-  - [x] Avoid intermediate `format()` calls that lose timezone context.
+- [x] **Task 1: Fix `DateHelper.php`**
+  - [x] Modify `toIso()` in `src/Helper/DateHelper.php` to convert dates to UTC before formatting.
   
-- [x] **Task 2: Refactor `HeaderSection.tsx`**
+- [x] **Task 2: Standardize `StudentActiveCampaignController.php`**
+  - [x] Replace manual `.format('Y-m-d H:i:s')` with `DateHelper::toIso()` for consistent UTC output.
+
+## Implementation: `bidding-web` (Frontend)
+
+- [x] **Task 3: Refactor `CollapsePanelExtra.tsx`**
+  - [x] Locate `src/features/bidding/components/shared/bidding-card/CollapsePanelExtra.tsx`.
+  - [x] Modify to use `parseUtc` directly and avoid intermediate local formatting.
+  
+- [x] **Task 4: Refactor `HeaderSection.tsx`**
   - [x] Locate `src/features/bidding/components/bid-submission/HeaderSection.tsx`.
-  - [x] Modify lines 58-59 to use `parseUtc` directly for `parsedStartDate` and `parsedEndDate`.
-  - [x] Verify that the `useMemo` dependencies for `phaseStatus` and `displayCountdown` are still correct.
+  - [x] Modify to use `parseUtc` directly and preserve `Date` context.
 
-## Post-Implementation Verification
+## Verification
 
-- [x] **Task 3: Run existing logic tests**
-  - [x] Run `npm unit test` on relevant utility tests in `bidding-web/src/features/bidding/utils/__tests__/phase.test.tsx`.
-  - [x] Verify that `getPhaseStatus` and `getPhaseDisplayText` correctly handle both `Date` objects and ISO strings with 'Z'.
-
-- [x] **Task 4: Manual Verification in Browser**
-  - [x] PM (User profile set at SGT) create campaign with a round closing at 1:20 AM SGT.
-  - [x] Login as Student (profile set at SGT).
-  - [x] **Expected UI**: Bidding round card should show `Closes at 1:20 AM` or `Closed on 27 Mar 2026, 01:20 GMT+8`.
-  - [x] **BUG UI**: Bidding round card should NOT show `09:20 GMT+8`.
+- [x] **Task 5: Post-Implementation Verification**
+  - [x] Verify that the API returns true UTC (ending in Z) for campaign dates.
+  - [x] Verify that PM configurations in SGT correctly match the student portal display.
+  - [x] Verify no regression on DST transition days (e.g., March 29).
