@@ -23,7 +23,8 @@
 - **Purpose:** Validates add/drop and waitlist requests before they are explicitly executed.
 - **Changes:**
   - Introduced `validateNoUnresolvedDuplicateEnrollments(Student $student)` to check if the student has multiple ENROLLED/SELECTED bids for the same course in parallel bidding campaigns whose duplicates haven't been resolved with drops.
-  - Fixed `validateNoDuplicateCoursesWithCurrentEnrollment` to block adding a course in Add/Drop 2 if the same course is selected in Add/Drop 1, with proper module scoping.
+  - **`validateNoDuplicateCoursesWithCurrentEnrollment` — module-scoped drop exclusion fix**: The function now accepts an additional `?int $moduleId` parameter. When computing `$droppedCourseIds` (courses to exclude from the duplicate check), it ONLY excludes a course if the student has an ENROLLED or SELECTED bid for that class **in the current module** (`campaignModule = $moduleId`). This prevents a student from bypassing the cross-phase duplicate check by including a class from Add/Drop 1 in their Add/Drop 2 `drops` list.
+  - `validateDrops` is NOT changed to be module-scoped — this remains intentionally campaign-wide so the validator correctly confirms the student has a droppable bid (regardless of which module it belongs to). The module scoping for actual drop execution remains in `AddDropService::executeCampaignAddDrop` (which filters by `campaignModule = $moduleId` when dropping). The duplicate-bypass gap is closed at the `validateNoDuplicateCoursesWithCurrentEnrollment` level, not at `validateDrops`.
 
 ### `AddDropService`
 - **Path:** `bidding-api/src/Domain/Campaign/ActiveCampaign/AddDropService.php`
@@ -32,6 +33,7 @@
   - Added `getStudentFinancialSnapshot(Student $student)` for safe retrieval of points and capital.
   - Uncommented/enabled `validateBidPoints()` during submission.
   - Updated `findOneBy` queries fetching drop bids to filter by the active module ID.
+  - **Pass `$moduleId` to `validateNoDuplicateCoursesWithCurrentEnrollment`** in Step 5c so that the drop exclusion inside that function is module-scoped. Previously this call passed no `$moduleId`, which allowed the cross-module drop bypass.
 
 ### `bidding-web` (Frontend UI — Add/Drop Dropdown Blocking)
 - **Paths:** 
@@ -54,5 +56,6 @@
 ## Internal APIs
 
 - `BidValidator->validate()`: Invoked early during `CreateBiddingService->submit()`. Validates previously enrolled courses, time conflicts, backup flexibility, and within-submission duplicates. Does NOT validate cross-round duplicates — students may bid on the same course in multiple parallel rounds.
-- `AddDropService->submitAddDrop()`: Checks new validation rules early; explicitly maps over drops and adds with module-scoped constraints.
-- `AddDropValidator->validateNoUnresolvedDuplicateEnrollments()`: Evaluates pending/unresolved duplicates. Stops execution directly if discrepancies exist.
+- `AddDropService->submitAddDrop()`: Checks new validation rules early; explicitly maps over drops and adds with module-scoped constraints. Now passes `$moduleId` to `validateNoDuplicateCoursesWithCurrentEnrollment` at Step 5c.
+- `AddDropValidator->validateNoUnresolvedDuplicateEnrollments()`: Evaluates pending/unresolved duplicates from parallel bidding rounds (scoped to current module). Stops execution directly if discrepancies exist.
+- `AddDropValidator->validateNoDuplicateCoursesWithCurrentEnrollment($enrollments, $drops, $student, $campaign, $moduleId)`: Now accepts `$moduleId`. When building `$droppedCourseIds`, queries the database to confirm each dropped class has an enrolled bid in the current module. Only those confirmed drops exclude their course from the campaign-wide duplicate map. This ensures a student cannot use a cross-module class in their drop list to bypass the cross-add/drop-phase duplicate check.

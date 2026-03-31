@@ -9,7 +9,7 @@ This PR addresses critical validation gaps and runtime crash risks across the Bi
 1. Prevents `Call to a member function getRemainingCapital() on null` errors when a `StudentData` record is missing.
 2. Enforces mandatory resolution of pre-existing duplicate course enrollments stemming from parallel bidding rounds during Add/Drop.
 3. Enables strict capital (bid points) validation which was previously bypassed, blocking negative capital submissions.
-4. Aligns and documents existing duplicate-course validation guardrails (cross-module and same-request duplicates) with robust test coverage.
+4. Aligns and documents existing duplicate-course validation guardrails (same-request duplicates) with test coverage.
 5. Removes cross-round duplicate prevention from the Bidding phase — students are now allowed to submit bids for the same course across multiple active parallel bidding rounds (e.g., BIDDING1 and BIDDING2). Duplicate resolution is deferred to the Add/Drop phase.
 6. Fixes a fatal error caused by referencing the undefined `BidStatus::SUBMITTED` enum case in the cross-round duplicate query, which caused a 500 Internal Server Error on every bid submission.
 7. Fixes a Doctrine `[Semantical Error]` caused by referencing non-existent `b.moduleId` DQL field instead of the correct `b.campaignModule` association in the cross-round duplicate query.
@@ -42,7 +42,7 @@ Previously, there was no cross-module evaluation of bids to prevent the same cou
 1. **Null-safe financial snapshot in `AddDropService`**
    - Added `getStudentFinancialSnapshot(Student $student)` which provides safe defaults (`credits_taken = 0.0`, `remaining_capital = 0`).
    - Applied in `buildResponse()` for `bid_points_remaining` calculation and `createAuditLog()` for `oldData`.
-   - Updated `AddDropValidator::validateBidPoints()` to read remaining capital safely via `$student->getStudentData()?->getRemainingCapital() ?? 0`.
+   - Updated `AddDropValidator::validateBidPoints()` to read remaining capital safely via null-safe access: `$student->getStudentData()?->getRemainingCapital() ?? 0`.
 
 2. **Unresolved Duplicate Prevention in `AddDropValidator` & `BidRepository`**
    - Added `BidRepository::findDuplicateEnrolledCoursesByStudentAndCampaign()` to query same-campaign duplicate entries. Added optional `$moduleId` parameter to scope duplicates to a specific bidding round.
@@ -58,9 +58,9 @@ Previously, there was no cross-module evaluation of bids to prevent the same cou
    - Uncommented/enabled `validateBidPoints()` inside `submitAddDrop()`.
 
 5. **Duplicate-course Guardrails (Documented & Tested)**
-   - Rejects adding multiple sections of the same course within singular submissions.
-   - Checks campaign-scoped prior module additions (e.g., Add/Drop 1 courses cannot be added in Add/Drop 2 unless dropped).
-   - Added UI-level blocking via the `AddDropAvailableCourseDto` using `disabled_reason = 'already_enrolled_in_campaign'` and `'already_waitlisted_in_campaign'` for courses the student is already enrolled/waitlisted in within the current campaign (cross-module duplicate detection).
+   - Rejects adding multiple sections of the same course within a single submission (same-request duplicate detection).
+   - Campaign-scoped cross-phase duplicate prevention via `validateNoDuplicateCoursesWithCurrentEnrollment($moduleId)`: rejects adding a course already enrolled/waitlisted in the campaign across any module. Drop-exclusion is now module-scoped — a class in the `drops` list only exempts its course if the student has an ENROLLED or SELECTED bid for that class **in the current module** (`campaignModule = $moduleId`). This closes the bypass where a cross-module class in drops could incorrectly exclude a course from the duplicate check.
+   - Added UI-level blocking via the `AddDropAvailableCourseDto` using `disabled_reason = 'already_enrolled_in_campaign'` and `'already_waitlisted_in_campaign'` for courses the student is already enrolled/waitlisted in within the current campaign (cross-module duplicate detection at the API response level).
 
 6. **Cross-Round Duplicate Prevention REMOVED from Bidding Phase (`BidValidator`)**
    - Commented out the `validateNoParallelRoundDuplicates()` call in `BidValidator::validate()`.
@@ -97,7 +97,7 @@ Previously, there was no cross-module evaluation of bids to prevent the same cou
 - **API response & Database Schema:** Unchanged.
 - **Null Safety:** Missing `studentData` degrades gracefully to `0` values rather than throwing HTTP 500s.
 - **Capital Constraints:** Users can no longer exploit Add/Drop with underfunded capital.
-- **Duplicates (Add/Drop):** Students entering Add/Drop with multi-round duplicates are forced to resolve them before any new changes apply.
+- **Duplicates (Add/Drop):** Students entering Add/Drop with multi-round (parallel bidding) duplicates are forced to resolve them (scoped per module) before any new changes apply. Campaign-scoped cross-phase duplicate prevention (same course in Add/Drop 1 and Add/Drop 2) is fully enforced — the cross-module drop bypass has been closed by module-scoping the drop-exclusion logic in `validateNoDuplicateCoursesWithCurrentEnrollment()`.
 - **Duplicates (Bidding):** Students **CAN** now bid on the same course in multiple parallel bidding rounds. Cross-round duplicate prevention is removed from the bidding phase. Duplicate resolution is deferred to the Add/Drop phase.
 
 ## Tests Added/Updated
@@ -107,7 +107,8 @@ Previously, there was no cross-module evaluation of bids to prevent the same cou
    - Parallel bidding duplicate blockage + resolution by dropping.
    - Null-`studentData` bid-points pass/fail boundaries.
    - Insufficient capital rejections vs. pass-via-drop-refund.
-   - Campaign-wide cross-module duplicate restrictions and same-submission duplication.
+   - Same-submission duplicate course rejection.
+   - Cross-phase module-scoped tests for `validateNoDuplicateCoursesWithCurrentEnrollment($moduleId)`: cross-module duplicate rejection, cross-module drop bypass rejection, same-module drop-then-add acceptance, and different-course pass.
 
 ## Verification
 
@@ -118,3 +119,4 @@ Previously, there was no cross-module evaluation of bids to prevent the same cou
 - [x] Verified backup flexibility: students can now add the same course in different sections if one is marked as backup.
 - [x] Verified cross-round duplicate prevention is removed: students CAN submit the same course in BIDDING1 and BIDDING2 without error.
 - [x] Verified previously enrolled course blocking remains in the bidding phase.
+- [x] Regression fixed: Add/Drop 1 course now correctly blocked in Add/Drop 2 even when a cross-module class is included in the `drops` list — `validateNoDuplicateCoursesWithCurrentEnrollment()` now requires a matching enrolled bid in the current module before honoring a drop exclusion.

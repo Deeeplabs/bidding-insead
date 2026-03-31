@@ -13,13 +13,20 @@
 - [x] 2.4 Enable `validateBidPoints()` in `AddDropService::submitAddDrop()` (Step 8a) and remove the comment stating it is not enforced.
 - [x] 2.5 Update `AddDropService.php` and `AddDropValidator.php` to pass `$moduleId` to limit finding dropped bids and refunded bid points exclusively to that specific module.
 - [x] 2.6 **Critical Fix**: Ensure `validateNoUnresolvedDuplicateEnrollments()` receives `$moduleId` so that Add/Drop in bid2 does NOT see duplicates from bid1. The validation is now properly scoped per module.
+- [x] 2.7 **Cross-Phase Duplicate Fix**: Update `validateNoDuplicateCoursesWithCurrentEnrollment()` signature to accept `?int $moduleId = null`. When `$moduleId` is provided, build `$droppedCourseIds` by querying the database for each dropped class — only include the course in the exclusion map if the student has an ENROLLED or SELECTED bid for that class in the **current module** (`campaignModule = $moduleId`). If no matching bid exists in the current module, the course is NOT excluded from the campaign-wide duplicate check.
+- [x] 2.8 **Pass moduleId at call site**: In `AddDropService::submitAddDrop()` Step 5c, pass `$moduleId` to `validateNoDuplicateCoursesWithCurrentEnrollment($enrollments, $drops, $student, $campaign, $moduleId)` so the module-scoped drop exclusion logic activates.
 
 ## 3. Regression Test Coverage
 
 - [x] 3.1 Unresolved Duplicate Constraints tests: Add tests in `AddDropValidatorPreviousEnrollmentTest` for parallel bidding duplicate blocking, successful duplicate resolution via drop, partial resolution failures, and clean passes without duplicates.
 - [x] 3.2 Add/Drop Null-Safety tests: Add tests in `AddDropServiceNullSafetyTest.php` to verify summary fallback, audit log `oldData` fallback, and end-to-end safe progression with null `studentData`.
 - [x] 3.3 Capital validation: Add/update `AddDropValidatorPreviousEnrollmentTest` scenarios for null `studentData` bid-point passes, negative capital rejection, and drop-refund offset successes.
-- [x] 3.4 Cross-Module Duplicates: Add tests for `validateNoDuplicateCoursesWithCurrentEnrollment()` cross-module detection, same-submission duplicate rejection, and drop-then-add parity.
+- [x] 3.4 Cross-Phase Add/Drop Duplicate Tests: Add tests for `validateNoDuplicateCoursesWithCurrentEnrollment()` covering:
+  - Student enrolls in Finance 101 in Add/Drop 1 (moduleId=3), then tries to enroll Finance 101 class in Add/Drop 2 (moduleId=5) → REJECTED
+  - Student enrolls in Finance 101 in Add/Drop 1 (moduleId=3), then tries to enroll a DIFFERENT SECTION of Finance 101 in Add/Drop 2 (moduleId=5) → REJECTED
+  - Student enrolls Finance 101 in Add/Drop 1 (moduleId=3), then submits Add/Drop 2 (moduleId=5) with Finance 101 class in drops list (cross-module bypass attempt) + Finance 101 EB in enrollments → REJECTED (cross-module drop does not count as exclusion)
+  - Legitimate drop-then-add within SAME module (moduleId=3 drops class 1501 and adds class 1502 of same course) → ACCEPTED
+  - Same-submission duplicate rejection (two sections of same course in one request) → REJECTED
 
 ## 4. Bidding Round Validation Changes
 
@@ -39,11 +46,18 @@
 - [x] 5.4 **Toast feedback**: In `use-add-drop-waitlist-form.tsx`, `handleAddCourse` calls `validateCourseAddition()` and shows a toast error for invalid courses (including enrolled).
 - [x] 5.5 **Bidding round dropdown**: Confirm the bidding form dropdown (`use-bidding-form.ts`) does NOT disable courses that are bid on in parallel rounds. Only previously enrolled and conflicting courses are disabled.
 
-## 6. Verification
+## 6. Cross-Phase Add/Drop Duplicate — Targeted Verification
+
+- [ ] 6.12 Manually verify: student submits Finance 101 in Add/Drop 1 (moduleId=bid1) and then submits Finance 101 again in Add/Drop 2 (moduleId=bid2) → API returns 400 with "Already enrolled in course Finance 101 in this campaign."
+- [ ] 6.13 Manually verify: student submits Finance 101 Section EA in Add/Drop 1, then submits Finance 101 Section EB in Add/Drop 2 → API returns 400 (different section, same course, must still be rejected).
+- [ ] 6.14 Manually verify the cross-module drop bypass is blocked: student submits Add/Drop 2 with Finance 101 class from Add/Drop 1 in the drops list and Finance 101 Section EB in enrollments → still 400 (cross-module drop is not counted as a valid exclusion).
+- [ ] 6.15 Manually verify: drop-then-add Finance 101 EA → EB within the SAME module still works after the fix (moduleId in drops and enrollments match).
+
+## 7. Original Verification
 
 - [x] 6.1 Run PHPUnit tests covering `AddDropServiceNullSafetyTest.php` and `AddDropValidatorPreviousEnrollmentTest.php`.
 - [x] 6.2 Manually verify parallel bidding duplicate forces drop in Add/Drop.
-- [x] 6.3 Manually verify Add/Drop 1 course blocked in Add/Drop 2.
+- [x] 6.3 Manually verify Add/Drop 1 course blocked in Add/Drop 2. (**REGRESSION** — fixed via tasks 2.7 & 2.8; `validateNoDuplicateCoursesWithCurrentEnrollment` now module-scoped; cross-module drop bypass closed)
 - [x] 6.4 Manually verify negative capital submission is blocked.
 - [x] 6.5 Manually verify dropping courses exclusively targets the submitted bidding round.
 - [x] 6.6 Manually verify students CAN submit the same course in BIDDING1 and BIDDING2 without error.

@@ -62,25 +62,53 @@ When a student has the same course ENROLLED or SELECTED from multiple bidding ro
 
 ### Requirement: Prevent adding a course in Add/Drop 2 that was already added in Add/Drop 1
 
-When a student adds a course during Add/Drop 1 (creating an ENROLLED or WAITLISTED bid), attempting to add the same course in Add/Drop 2 SHALL be rejected. Both Add/Drop modules share the same Campaign, so the existing campaign-scoped duplicate detection covers this scenario.
+When a student adds a course during Add/Drop 1 (creating an ENROLLED or WAITLISTED bid), attempting to add the same course in Add/Drop 2 SHALL be rejected regardless of whether a different class section is selected. Both Add/Drop modules share the same Campaign, so `validateNoDuplicateCoursesWithCurrentEnrollment` detects this via a campaign-scoped query.
 
-#### Scenario: Student adds course in Add/Drop 1, tries to add same course in Add/Drop 2
-- **GIVEN** student "Jane Smith" submitted an Add/Drop request in Add/Drop 1 (campaign module sequence 3) for campaign 10, enrolling in class 1501 (course "Finance 101", section EA)
+**Important — module-scoped drop exclusion**: When computing which courses to exclude from the duplicate check (via the `drops` list in the submission), the system SHALL only exclude courses if the student has an actual droppable bid in the **current module** for that class. A class dropped from Add/Drop 2's drop list that belongs to Add/Drop 1 (different module) MUST NOT bypass the duplicate check. Specifically: `validateNoDuplicateCoursesWithCurrentEnrollment` must receive `$moduleId` and use it to verify that any class in `$drops` actually has an ENROLLED/SELECTED bid in the current module before excluding its course from the duplication map.
+
+#### Scenario: Student adds course in Add/Drop 1, tries to add same course (same section) in Add/Drop 2
+- **GIVEN** student "Jane Smith" submitted an Add/Drop request in Add/Drop 1 (campaign module sequence 3, moduleId=3) for campaign 10, enrolling in class 1501 (course "Finance 101", section EA)
+- **AND** the bid for class 1501 has status ENROLLED, campaign_id=10, campaign_module_id=3
+- **WHEN** the student submits an Add/Drop request in Add/Drop 2 (moduleId=5) for campaign 10 with enrollment for class 1501 (same class)
+- **THEN** the system rejects the request with a `\DomainException`
+- **AND** the error message is: "Already enrolled in Finance 101 (EA)"
+
+#### Scenario: Student adds course in Add/Drop 1, tries to add same course (different section) in Add/Drop 2
+- **GIVEN** student "Jane Smith" submitted an Add/Drop request in Add/Drop 1 (moduleId=3) for campaign 10, enrolling in class 1501 (course "Finance 101", section EA)
 - **AND** the bid for class 1501 has status ENROLLED in campaign 10
-- **WHEN** the student submits an Add/Drop request in Add/Drop 2 (campaign module sequence 4) for campaign 10 with enrollment for class 1502 (course "Finance 101", section EB)
+- **WHEN** the student submits an Add/Drop request in Add/Drop 2 (moduleId=5) for campaign 10 with enrollment for class 1502 (course "Finance 101", section EB)
 - **THEN** the system rejects the request with a `\DomainException`
 - **AND** the error message is: "Already enrolled in course Finance 101 in this campaign. Drop the existing enrollment first before adding a different section."
 
 #### Scenario: Student adds course in Add/Drop 1 (waitlisted), tries to add same course in Add/Drop 2
-- **GIVEN** student "Jane Smith" submitted in Add/Drop 1 for class 1501 (course "Finance 101") and was WAITLISTED (class full)
-- **WHEN** the student submits in Add/Drop 2 with enrollment for class 1502 (course "Finance 101", different section)
+- **GIVEN** student "Jane Smith" submitted in Add/Drop 1 (moduleId=3) for class 1501 (course "Finance 101") and was WAITLISTED (class full)
+- **WHEN** the student submits in Add/Drop 2 (moduleId=5) with enrollment for class 1502 (course "Finance 101", different section)
 - **THEN** the system rejects the request with a `\DomainException`
 - **AND** the error message is: "Already waitlisted for course Finance 101 in this campaign. Remove from waitlist first before adding a different section."
 
+#### Scenario: Cross-module drop bypass is rejected
+- **GIVEN** student "Jane Smith" enrolled in class 1501 (course "Finance 101", section EA) via Add/Drop 1 (moduleId=3), bid has campaign_module_id=3
+- **WHEN** the student submits Add/Drop 2 (moduleId=5) with:
+  - drops: [class 1501] (which belongs to moduleId=3, not moduleId=5)
+  - enrollments: [class 1502 (course "Finance 101", section EB)]
+- **THEN** the system rejects the request with a `\DomainException`
+- **AND** the error message is: "Already enrolled in course Finance 101 in this campaign. Drop the existing enrollment first before adding a different section."
+- **AND** class 1501 is NOT dropped (it belongs to Add/Drop 1, not Add/Drop 2)
+- **WHY**: The `drops` list in a moduleId=5 submission MUST NOT be used to bypass duplicate detection for courses enrolled under a different module. The system checks whether the dropped class has an enrolled bid in the current module; if not, the course is NOT excluded from the duplicate check.
+
 #### Scenario: Student adds different courses in Add/Drop 1 and Add/Drop 2
-- **GIVEN** student "Jane Smith" enrolled in class 1501 (course "Finance 101") during Add/Drop 1
-- **WHEN** the student submits in Add/Drop 2 with enrollment for class 1601 (course "Marketing 201")
+- **GIVEN** student "Jane Smith" enrolled in class 1501 (course "Finance 101") during Add/Drop 1 (moduleId=3)
+- **WHEN** the student submits in Add/Drop 2 (moduleId=5) with enrollment for class 1601 (course "Marketing 201")
 - **THEN** the system accepts the submission (different courses, no conflict)
+
+#### Scenario: Legitimate drop-then-add within the SAME module still works
+- **GIVEN** student "Jane Smith" enrolled in class 1501 (course "Finance 101", section EA) via Add/Drop 1 (moduleId=3), bid has campaign_module_id=3
+- **WHEN** the student submits Add/Drop 1 (moduleId=3) again with:
+  - drops: [class 1501] (belongs to moduleId=3 — valid current-module drop)
+  - enrollments: [class 1502 (course "Finance 101", section EB)]
+- **THEN** the system accepts the submission (drop is in the same module, so Finance 101 is correctly excluded from the duplicate check)
+- **AND** bid for class 1501 is marked DROPPED
+- **AND** new bid for class 1502 is created
 
 ### Requirement: Reject duplicate courses within a single Add/Drop submission
 
