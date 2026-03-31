@@ -1,32 +1,38 @@
 ## Why
 
-The Student Portal (`bidding-web`) incorrectly displays bidding round closing and opening times, causing an 8-hour shift for users in the SGT (GMT+8) timezone. In addition, durations for bidding rounds are frequently off by 1 or 2 hours across daylight saving time shifts, causing countdowns to display "1d 22h" instead of the expected "1d 23h".
+Despite previous fixes to `DateHelper::toIso()`, `DateHelper::parse()`, and the frontend date components, a **+1 hour offset** persists between the dates shown in the pre-bidding module configuration form and the dates displayed on both the PM Campaign list and the Student dashboard. Both the PM and Student are in the same timezone (GMT+8), yet the displayed start/end dates are consistently 1 hour ahead of the configured values (e.g., config shows `06:00`, display shows `07:00 GMT+8`).
 
-This issue is caused by a three-fold bug in the processing pipeline:
-1. **Database Naive UTC Drift**: The backend stores dates in MySQL `DATETIME` columns without timezone information. Doctrine reads these and instantiates `DateTime` objects assuming the server's local timezone (Europe/Paris).
-2. **Incorrect UTC Conversion (`DateHelper::toIso`)**: `DateHelper::toIso` was blindly appending a `Z` suffix. While the previous attempt to fix this converted the Paris-timezone object to UTC, it actually modified the hour, shifting `17:00 UTC` (which Doctrine labeled as `17:00 Paris`) to `16:00 UTC`, creating the 1-2 hour DST discrepancy ("1d 23h" issue).
-3. **Double-Parsing Bug (Frontend)**: Components (`CollapsePanelExtra` and `HeaderSection`) in `bidding-web` were stripping timezone context during intermediate formatting, then re-parsing these local strings as UTC, adding the offset a second time.
+This remaining issue is caused by **inconsistent timezone handling across multiple backend code paths**:
+
+1. **Phase Activation Overwrites with Server-Local Time**: `CampaignPhaseService::activatePhase()` uses `$now = new \DateTime()` (server timezone: Europe/Paris, CET/CEST) and overwrites both the `phase_config.start_date` DATETIME column via `setStartDate($now)` and the JSON `module_config.start_date`/`actual_start_date` via `$now->format(\DateTime::ATOM)`. This replaces UTC-correct values with Europe/Paris local-time values, which `DateHelper::toIso()` then mislabels as UTC.
+2. **Campaign-Level Date Save Without `DateHelper::parse()`**: `CampaignService` line 886 saves campaign start/end dates using `new \DateTime($data['start_date'])` directly, bypassing the UTC-safe `DateHelper::parse()` method.
+3. **`new \DateTime()` Used Throughout for `$now` Comparisons**: Active-range checks (e.g., `$now >= $startDate && $now <= $endDate`) use `new \DateTime()` (server local) against Doctrine DateTime objects whose timezone context is ambiguous (Doctrine labels UTC DB values as Europe/Paris).
+4. **Data Source Mismatch Between Config Form and Display**: The admin config DatePicker reads `module_config.start_date` from the JSON column (which may hold the original UTC ISO string or an activation-overwritten ATOM string). The student API and PM tooltip read from the DATETIME column through `DateHelper::toIso()`. When the activation flow overwrites only one of these sources, they diverge.
 
 ## What Changes
 
-- **Fix `DateHelper.php` (Backend)**: Refactor `toIso()` to reinterpret the naive datetime string from Doctrine as UTC *without* shifting the hours. Add a `parse()` method that guarantees timezone-aware UTC datetime instantiation before saving to the database.
-- **Fix Student API (Backend)**: Standardize date fields in student-facing controllers to use `DateHelper::toIso()` instead of manual formatting.
-- **Fix `CollapsePanelExtra.tsx` (Frontend)**: Refactor to pass `Date` objects directly to phase utilities, avoiding timezone-stripping formatting.
-- **Fix `HeaderSection.tsx` (Frontend)**: Similarly refactor to maintain `Date` context throughout the display pipeline.
+- **Fix `CampaignPhaseService.php` (Backend)**: Ensure `activatePhase()` and `closePhase()` use explicit UTC `DateTime` objects (`new \DateTime('now', new \DateTimeZone('UTC'))`) when setting `startDate`/`endDate` on phase configs, and use `DateHelper::toIso()` consistently for JSON config values (`actual_start_date`, `start_date`, etc.).
+- **Fix `CampaignService.php` (Backend)**: Replace `new \DateTime($data['start_date'])` with `DateHelper::parse($data['start_date'])` for campaign-level start/end dates.
+- **Fix `DateHelper.php` (Backend)**: Add a `utcNow()` helper to centralize UTC-safe `$now` creation. Ensure `toIso()` accounts for the possibility that the underlying DateTime has a non-UTC timezone by always converting to UTC before extracting the string.
+- **Fix `is_active` Comparisons (Backend)**: Standardize all `$now` instantiations in active-range checks (Campaign entity, CampaignService, mappers) to use `DateHelper::utcNow()` so comparisons are consistently in UTC.
+- **Fix `AdminCampaignDetailService.php` (Backend)**: Ensure the PM dashboard detail service formats phase dates through `DateHelper::toIso()`.
 
 ## Capabilities
 
 ### Modified Capabilities
 
-- **Accurate Bidding Round Status**: Students now see the correct local times for bidding round starts and ends, aligned precisely with the PM's configuration across all server regions, ensuring countdowns strictly match the expected configured duration (eliminating the "1d 23h" DST gap).
+- **Accurate Bidding Round Time Display**: Both PM and Student portals display start/end times that exactly match the configured values in the pre-bidding module configuration, regardless of server timezone or DST state.
+- **Consistent Activation Timestamps**: When a PM manually starts or stops a phase, the recorded timestamps are UTC-correct, ensuring the displayed dates remain consistent with the original configuration.
 
 ## Impact
 
-- **bidding-api**: `src/Helper/DateHelper.php` — Fix UTC re-interpretation logic and add robust parser.
-- **bidding-api**: `src/Domain/Campaign/Campaign/CampaignService.php` — Ensure UTC interpretation on save.
-- **bidding-api**: `src/Domain/Campaign/ActiveCampaign/Mapper/CampaignToModuleDetailDtoMapper.php` — Use robust parser for mapping.
-- **bidding-web**: `src/features/bidding/components/shared/bidding-card/CollapsePanelExtra.tsx` — Refactor to use `Date` objects.
-- **bidding-web**: `src/features/bidding/components/bid-submission/HeaderSection.tsx` — Refactor to use `Date` objects.
-- **Affected roles**: Students and Administrators.
-- **No migration required**: No database schema changes.
-- **No regression risk**: Fixing the parsing logic restores intended behavior for all timezones and eliminates DST duration shifting.
+- **bidding-api**: `src/Helper/DateHelper.php` — Add `utcNow()` helper; harden `toIso()` to always convert to UTC.
+- **bidding-api**: `src/Domain/Campaign/Campaign/CampaignPhaseService.php` — Use UTC DateTime in `activatePhase()`/`closePhase()` and `DateHelper::toIso()` for JSON config dates.
+- **bidding-api**: `src/Domain/Campaign/Campaign/CampaignService.php` — Replace `new \DateTime(...)` with `DateHelper::parse()` for campaign dates; use `DateHelper::utcNow()` in `$now` comparisons.
+- **bidding-api**: `src/Entity/Campaign.php` — Use `DateHelper::utcNow()` in `getCurrentActivePhaseDetails()` for `$now`.
+- **bidding-api**: `src/Domain/Campaign/ActiveCampaign/Mapper/CampaignToActiveBiddingRoundDtoMapper.php` — Use `DateHelper::utcNow()`.
+- **bidding-api**: `src/Domain/Campaign/ActiveCampaign/Mapper/CampaignToModuleDetailDtoMapper.php` — Use `DateHelper::utcNow()`.
+- **bidding-api**: `src/Domain/Dashboard/Campaign/AdminCampaignDetailService.php` — Use `DateHelper::toIso()` for phase dates.
+- **Affected roles**: Programme Managers and Students.
+- **No migration required**: No database schema changes. Existing data with server-local-time values may need a one-time correction script.
+- **Regression risk**: Low — changes enforce the UTC convention that was intended but not consistently applied.
