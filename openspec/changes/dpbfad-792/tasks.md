@@ -8,10 +8,11 @@
 ## 2. Duplicate Enrollment Validation & Capital Enforcement
 
 - [x] 2.1 Add `findDuplicateEnrolledCoursesByStudentAndCampaign()` to `bidding-api/src/Repository/BidRepository.php` to group and return `course_id`s with >1 ENROLLED/SELECTED bids.
-- [x] 2.2 Add `validateNoUnresolvedDuplicateEnrollments(array $drops, Student $student, Campaign $campaign)` to `AddDropValidator.php`. Ensure it calculates remaining enrollment count after factoring in drops.
-- [x] 2.3 Call `validateNoUnresolvedDuplicateEnrollments()` in `AddDropService::submitAddDrop()` immediately after student eligibility check (Step 4a).
+- [x] 2.2 Add `validateNoUnresolvedDuplicateEnrollments(array $drops, Student $student, Campaign $campaign, ?int $moduleId = null)` to `AddDropValidator.php`. Ensure it calculates remaining enrollment count after factoring in drops.
+- [x] 2.3 Call `validateNoUnresolvedDuplicateEnrollments()` in `AddDropService::submitAddDrop()` immediately after student eligibility check (Step 4a). Pass `$moduleId` to scope validation to current bidding round.
 - [x] 2.4 Enable `validateBidPoints()` in `AddDropService::submitAddDrop()` (Step 8a) and remove the comment stating it is not enforced.
 - [x] 2.5 Update `AddDropService.php` and `AddDropValidator.php` to pass `$moduleId` to limit finding dropped bids and refunded bid points exclusively to that specific module.
+- [x] 2.6 **Critical Fix**: Ensure `validateNoUnresolvedDuplicateEnrollments()` receives `$moduleId` so that Add/Drop in bid2 does NOT see duplicates from bid1. The validation is now properly scoped per module.
 
 ## 3. Regression Test Coverage
 

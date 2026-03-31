@@ -28,9 +28,10 @@ In parallel bidding campaigns (multiple modules), students can legitimately end 
    - Updated `AddDropValidator::validateBidPoints()` to read remaining capital safely via `$student->getStudentData()?->getRemainingCapital() ?? 0`.
 
 2. **Unresolved Duplicate Prevention in `AddDropValidator` & `BidRepository`**
-   - Added `BidRepository::findDuplicateEnrolledCoursesByStudentAndCampaign()` to query same-campaign duplicate entries.
-   - Added `AddDropValidator::validateNoUnresolvedDuplicateEnrollments()` which mandates dropping all-but-one class per duplicated course.
-   - Wired this validation symmetrically as step 4a in `submitAddDrop()` (runs unconditionally).
+   - Added `BidRepository::findDuplicateEnrolledCoursesByStudentAndCampaign()` to query same-campaign duplicate entries. Added optional `$moduleId` parameter to scope duplicates to a specific bidding round.
+   - Added `AddDropValidator::validateNoUnresolvedDuplicateEnrollments()` which mandates dropping all-but-one class per duplicated course. Now accepts `$moduleId` to validate only within the current module (bid1 or bid2).
+   - Wired this validation as step 4a in `submitAddDrop()` (runs unconditionally).
+   - **Critical Fix**: The validation now properly scopes to the current bidding round using `$moduleId`, so Add/Drop in bid2 does NOT incorrectly block on duplicates from bid1.
 
 3. **Module-Scoped Add/Drop Resolution in `AddDropService`**
    - Added `$moduleId` scoping to `findOneBy()` queries during drop processing, point refunds (`validateBidPoints()`), and response building (`buildResponse()`).

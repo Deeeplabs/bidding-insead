@@ -1,8 +1,13 @@
 ## ADDED Requirements
 
-### Requirement: Force resolution of duplicate enrollments from parallel bidding rounds
+### Requirement: Force resolution of duplicate enrollments from parallel bidding rounds (within current module)
 
 When a student has the same course ENROLLED or SELECTED from multiple bidding rounds (e.g., bid round 1 and bid round 2) within the same campaign, the Add/Drop submission SHALL reject the request unless the student's drops resolve all duplicate enrollments down to at most one per course. This validation runs unconditionally on every add/drop submission (including drop-only requests).
+
+**Important**: The duplicate detection is scoped to the current module being submitted to. This means:
+- Add/Drop in bid1 only checks for duplicates within bid1's module
+- Add/Drop in bid2 only checks for duplicates within bid2's module
+- A student can have duplicate enrollments in bid1 AND bid2 simultaneously without conflict
 
 #### Scenario: Student has same course enrolled from bid round 1 and bid round 2, submits add/drop without dropping one
 - **GIVEN** student "John Doe" has an ENROLLED bid for class 1501 (course "Finance 101", section EA) from bid round 1 in campaign 10
@@ -11,6 +16,13 @@ When a student has the same course ENROLLED or SELECTED from multiple bidding ro
 - **THEN** the system rejects the request with a `\DomainException`
 - **AND** the error message is: "Duplicate enrollment detected for course Finance 101. You are enrolled in this course from multiple bidding rounds. Please drop one enrollment before submitting."
 - **AND** no bids are created or modified
+
+#### Scenario: Student with duplicates in bid1 can submit Add/Drop in bid2 without resolving bid1 duplicates
+- **GIVEN** student "John Doe" has ENROLLED bids for course "Finance 101" from bid round 1 (module 1) in campaign 10
+- **AND** student "John Doe" also has ENROLLED bids for course "Finance 101" from bid round 1 (creating duplicates within the same module)
+- **WHEN** the student submits an Add/Drop request for bid round 2 (module 2) for campaign 10
+- **THEN** the system checks for duplicates only within module 2
+- **AND** since bid round 2 has no duplicates, the submission is allowed to proceed (duplicates in bid round 1 are independent)
 
 #### Scenario: Student has same course enrolled from two rounds, drops one to resolve
 - **GIVEN** student "John Doe" has an ENROLLED bid for class 1501 (course "Finance 101", section EA) from bid round 1 in campaign 10

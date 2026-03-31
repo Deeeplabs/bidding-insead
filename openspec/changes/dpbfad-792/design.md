@@ -25,9 +25,10 @@ The bidding system Add/Drop & Waitlist phase has several missing guardrails and 
 ## Decisions
 
 ### 1. Unresolved Duplicate Detection (`AddDropValidator` & `BidRepository`)
-- Add `findDuplicateEnrolledCoursesByStudentAndCampaign(Student $student, Campaign $campaign)` to `BidRepository`. This query groups ENROLLED/SELECTED bids by `course_id` and returns those with `COUNT > 1`.
-- Add `validateNoUnresolvedDuplicateEnrollments(array $drops, Student $student, Campaign $campaign)` to `AddDropValidator`. It checks if any identified duplicates remain unresolved after applying the current request's drops. Throws `\DomainException` if so.
+- Add `findDuplicateEnrolledCoursesByStudentAndCampaign(Student $student, Campaign $campaign, ?int $moduleId = null)` to `BidRepository`. This query groups ENROLLED/SELECTED bids by `course_id` and returns those with `COUNT > 1`. When `$moduleId` is provided, only checks duplicates within that specific module.
+- Add `validateNoUnresolvedDuplicateEnrollments(array $drops, Student $student, Campaign $campaign, ?int $moduleId = null)` to `AddDropValidator`. It checks if any identified duplicates remain unresolved after applying the current request's drops. Throws `\DomainException` if so. When `$moduleId` is provided, only validates within that module's scope.
 - This runs *before* other enrollments checks in `AddDropService::submitAddDrop()`.
+- **Critical Fix**: The validation now correctly scopes to the current bidding round (bid1 or bid2) using `$moduleId`, preventing Add/Drop in bid2 from seeing duplicates from bid1.
 
 ### 2. Enable Capital Validation
 - Uncomment `$this->validator->validateBidPoints(...)` in `AddDropService::submitAddDrop()`. It runs after `validateCreditLimits()` and is guarded by `!empty($enrollments)`.
