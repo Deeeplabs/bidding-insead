@@ -12,7 +12,7 @@ In parallel bidding campaigns (multiple modules), students can legitimately end 
 `validateBidPoints()` exists in `AddDropValidator` but was never called in `AddDropService::submitAddDrop()`. This loophole allowed submissions resulting in negative bid point balances.
 
 ### 4. Module-Scoped Drop Targeting Flaw
-Dropping courses in one parallel bidding round (e.g., `bid2`) erroneously targeted and dropped identical course enrollments from another round (e.g., `bid1`). Drop queries and point refund calculations implicitly fetched the first available bid without scoping it to the active module.
+Dropping courses in one parallel bidding round (e.g., `bid1`) erroneously targeted and dropped identical course enrollments from another round (e.g., `bid1`). Drop queries and point refund calculations implicitly fetched the first available bid without scoping it to the active module.
 
 ### 5. Direct Duplicate Submission in Parallel Bidding Modules
 In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could independently submit bids for the identical course in both modules. There was no cross-module evaluation of open bids to halt duplicate course selections until after bids were computed to enrollments.
@@ -30,36 +30,41 @@ In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could in
 3. **Enable capital validation**: Uncomment/enable the `validateBidPoints()` call in `submitAddDrop()` to prevent negative capital.
 4. **Add null-safe financial snapshot handling**: Introduce `getStudentFinancialSnapshot(Student $student)` in `AddDropService` to safely read credits/capital with defaults. Use this snapshot for response calculations and audit logs. Harden `validateBidPoints()` to read capital via null-safe access.
 5. **Isolate drop operations by module**: Pass `$moduleId` into `findOneBy()` queries within `AddDropService` and `AddDropValidator` to guarantee drops, responses, and capital refunds strictly affect the active module.
-6. **Cross-round Bidding duplicate prevention**: Add validation in `BidValidator` during the Bidding phase to retrieve the student's bids in parallel rounds (using a new query in `BidRepository`) and throw an exception if they are trying to bid on a course they already bidded on.
+6. **Cross-round Bidding duplicate prevention**: Add validation in `BidValidator` during the Bidding phase to retrieve the student's bids in parallel rounds (using a new query in `BidRepository`) and throw an exception if they are trying to bid on a primary course they already bidded on.
 7. **Fix BidStatus::SUBMITTED reference**: Replace the undefined `BidStatus::SUBMITTED` enum case with `BidStatus::SELECTED` in `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` to resolve the 500 error on bid submission.
 8. **Fix incorrect DQL field `b.moduleId`**: Replace `b.moduleId` with `b.campaignModule` in `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` to resolve `[Semantical Error]` caused by referencing a non-existent field on the `Bid` entity.
-9. **Add regression tests**: Cover duplicate course resolution, capital validation, null `studentData` behaviors, and cross-round Bidding duplicates.
+9. **Relax backup selection validation**: Update `BidValidator` to remove conflict and duplicate submission restrictions specifically for backup courses. Allow students to select the same course with different sections in backup and remove time conflict validation for backup courses.
+10. **UI blocking for previously enrolled courses**: Update the Add/Drop modal in `bidding-web` to disable/block selection of courses the student has already enrolled in, rather than allowing selection and showing an error message on save.
+11. **Add regression tests**: Cover duplicate course resolution, capital validation, null `studentData` behaviors, cross-round Bidding duplicates, and the new relaxed backup logic.
 
 ## Capabilities
 
 ### New Capabilities
-- `bidding-duplicate-course-prevent`: Prevent users from bidding on the same course across parallel bidding rounds during the Bidding phase.
+- `bidding-duplicate-course-prevent`: Prevent users from bidding on the same primary course across parallel bidding rounds during the Bidding phase.
+- `relaxed-backup-validation`: Allow flexible backup selections including duplicate courses in different sections, time conflicts with primary courses, and cross-round duplicates.
 - `add-drop-duplicate-course-check`: Detect and reject duplicate courses during Add/Drop, including unresolved duplicate enrollments from parallel bidding, cross-module duplicate prevention, and same-submission duplication.
 - `add-drop-studentdata-null-safety`: Add/Drop submission and validation safely handle missing `StudentData` without fatal errors.
 - `enforce-capital-validation`: Capital validation is enforced during Add/Drop submissions.
+- `ui-blocking-enrolled-courses`: Student cannot select previously enrolled courses in the Add/Drop UI.
 
 ### Modified Capabilities
 - None.
 
 ## Impact
 
-- **Affected app(s):** `bidding-api`
-- **Affected entities:** `Student`, `StudentData`, `AuditLog`
+- **Affected app(s):** `bidding-api`, `bidding-web`
+- **Affected entities:** `Student`, `StudentData`, `AuditLog`, `Bid`
 - **Affected domain services:**
   - `App\Domain\Campaign\ActiveCampaign\AddDropService`
   - `App\Domain\Campaign\ActiveCampaign\Validator\AddDropValidator`
   - `App\Domain\Campaign\ActiveCampaign\Validator\BidValidator`
   - `App\Repository\BidRepository`
-- **API contract impact:** None. Validation errors use existing `\DomainException` pattern.
+- **API contract impact:** None. UI blocking relies on existing enrollment state info.
 - **Database migration required:** No.
 - **Backward compatibility:** Preserved; safely degrades to zero values instead of crashing. Previously-valid submissions with duplicates/negative capital will now be correctly rejected.
-- **Affected controllers:**
+- **Affected controllers/components:**
   - `StudentActiveCampaignController`
   - `CreateBiddingAddDropController`
-  - `CampusExchangeAddDropWaitlistController`
-  - `CampusExchangeAddDropAllotmentController`
+  - `AddDropModal` (frontend)
+  - `BiddingCourseList` (frontend)
+

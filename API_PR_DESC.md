@@ -1,7 +1,9 @@
 # Duplicate Course Verification & Enrollment Capital Null Safety in Bidding and Add/Drop
 
 ## Summary
-Jira: https://insead.atlassian.net/browse/DPBFAD-792
+Jira: 
+- https://insead.atlassian.net/browse/DPBFAD-792
+- https://insead.atlassian.net/browse/DPBFAD-851
 
 This PR addresses critical validation gaps and runtime crash risks across the Bidding and Add/Drop & Waitlist phases:
 1. Prevents `Call to a member function getRemainingCapital() on null` errors when a `StudentData` record is missing.
@@ -11,6 +13,7 @@ This PR addresses critical validation gaps and runtime crash risks across the Bi
 5. Introduces strict validation during the active Bidding phase to prevent students from submitting bids for the same exact course across multiple active parallel bidding rounds (e.g., BIDDING1 and BIDDING2).
 6. Fixes a fatal error caused by referencing the undefined `BidStatus::SUBMITTED` enum case in the cross-round duplicate query, which caused a 500 Internal Server Error on every bid submission.
 7. Fixes a Doctrine `[Semantical Error]` caused by referencing non-existent `b.moduleId` DQL field instead of the correct `b.campaignModule` association in the cross-round duplicate query.
+8. Relaxes backup selection validation to allow students more flexibility when picking alternative courses.
 
 ## Problem Context
 
@@ -66,6 +69,10 @@ In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could in
 8. **Fix incorrect DQL field `b.moduleId` → `b.campaignModule`**
    - Replaced `b.moduleId` with `b.campaignModule` in the exclude-module clause of `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`. The `Bid` entity has no `moduleId` property; the correct ManyToOne association is `campaignModule` (column `campaign_module_id`). This resolved the `[Semantical Error] line 0, col 200` that occurred on bid submission.
 
+9. **Relaxed Backup Validation (`BidValidator`)**
+   - Updated `validateNoDuplicates()` to allow multiple sections of the same course as long as one of them is a backup.
+   - Updated `validateNoParallelRoundDuplicates()` to skip verification for backup bids, allowing students to submit backups even if the course is already part of an active submission in another parallel round.
+
 ## Impact & Behavioral Changes
 
 - **API response & Database Schema:** Unchanged.
@@ -88,5 +95,7 @@ In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could in
 
 - [x] All entry point controllers verified conceptually.
 - [x] PHPUnit suite tests run and passed cleanly.
-- [x] Fix verified: `BidStatus::SUBMITTED` reference removed, replaced with `BidStatus::PENDING` — bid submissions no longer produce 500 errors.
+- [x] Fix verified: `BidStatus::SUBMITTED` reference removed, replaced with `BidStatus::SELECTED` — bid submissions no longer produce 500 errors.
 - [x] Fix verified: `b.moduleId` replaced with `b.campaignModule` — Doctrine semantical error on bid submission resolved.
+- [x] Verified backup flexibility: students can now add the same course in different sections if one is marked as backup.
+- [x] Verified cross-round duplicate bypass for backups: users can select courses as backups even if they are in parallel rounds.

@@ -21,12 +21,15 @@
 - [x] 3.3 Capital validation: Add/update `AddDropValidatorPreviousEnrollmentTest` scenarios for null `studentData` bid-point passes, negative capital rejection, and drop-refund offset successes.
 - [x] 3.4 Cross-Module Duplicates: Add tests for `validateNoDuplicateCoursesWithCurrentEnrollment()` cross-module detection, same-submission duplicate rejection, and drop-then-add parity.
 
-## 4. Parallel Bidding Submission Validation (New)
+## 4. Parallel Bidding Submission Validation & UI Polish
 
-- [x] 4.1 Provide new query `findSubmittedCourseIdsInParallelRoundsByStudentAndProgram` in `bidding-api/src/Repository/BidRepository.php` to fetch course IDs that the given student has submitted across currently running parallel bidding rounds in the current Program (excluding the current module ID). Use `BidStatus::SELECTED` to filter submitted bids (not `BidStatus::SUBMITTED` which does not exist in the enum).
+- [x] 4.1 Provide new query `findSubmittedCourseIdsInParallelRoundsByStudentAndProgram` in `bidding-api/src/Repository/BidRepository.php` to fetch course IDs that the given student has submitted across currently running parallel bidding rounds in the current Program (excluding the current module ID). Use `BidStatus::SELECTED` to filter submitted bids.
 - [x] 4.2 Add `validateNoParallelRoundDuplicates(array $newBids, Student $student, Campaign $campaign, int $activeModuleId)` to `bidding-api/src/Domain/Campaign/ActiveCampaign/Validator/BidValidator.php`.
-- [x] 4.3 Invoke `validateNoParallelRoundDuplicates()` from within `BidValidator->validate()` to reject the overall bid submission if cross-round duplicates are detected.
+- [x] 4.3 Invoke `validateNoParallelRoundDuplicates()` from within `BidValidator->validate()` to reject the overall bid submission if cross-round duplicates are detected for PRIMARY bids.
 - [x] 4.4 Bidding cross-round duplicates: Add test scenarios to `BidValidatorTest` to cover parallel bidding duplicate submission prevention.
+- [x] 4.5 **Relax Backup Validation**: Update `BidValidator::validateNoDuplicates()` to allow same-course-different-section if one is a backup.
+- [x] 4.6 **Relax Backup Validation**: Skip `validateNoParallelRoundDuplicates()` for backup bids in `BidValidator.php`.
+- [x] 4.7 **UI Blocking**: Implement logic in `bidding-web` (`validation.util.ts` / `useAddDropWaitlistForm.tsx`) to disable selection for previously enrolled courses in the Add/Drop modal.
 
 ## 5. Verification
 
@@ -34,7 +37,11 @@
 - [x] 5.2 Manually verify parallel bidding duplicate forces drop.
 - [x] 5.3 Manually verify Add/Drop 1 course blocked in Add/Drop 2.
 - [x] 5.4 Manually verify negative capital submission is blocked.
-- [x] 5.5 Manually verify dropping courses exclusively targets the submitted bidding round via QA video assessment.
+- [x] 5.5 Manually verify dropping courses exclusively targets the submitted bidding round.
 - [x] 5.6 Manually verify submitting a course in BIDDING1 restricts the same course submission in BIDDING2.
-- [x] 5.7 Fix `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`: replace undefined `BidStatus::SUBMITTED` with `BidStatus::SELECTED` to resolve 500 Internal Server Error on bid submission.
-- [x] 5.8 Fix `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`: replace incorrect DQL field `b.moduleId` with `b.campaignModule` — `Bid` entity has no `moduleId` field/association, causing `[Semantical Error] line 0, col 200 near 'moduleId != '`.
+- [x] 5.7 Fix `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`: replace undefined `BidStatus::SUBMITTED` with `BidStatus::SELECTED` to resolve 500 error.
+- [x] 5.8 Fix `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`: replace incorrect DQL field `b.moduleId` with `b.campaignModule`.
+- [ ] 5.9 Verify students can add the same course with different sections in backup.
+- [ ] 5.10 Verify no validation error for time conflicts with primary courses for backups.
+- [ ] 5.11 Verify no validation error for duplicate submission with previous bidding round for backups.
+- [ ] 5.12 Verify UI correctly blocks selection of previously enrolled courses.

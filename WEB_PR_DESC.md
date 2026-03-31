@@ -1,30 +1,36 @@
-# Fix: Ensure Bidding Page Refreshes After Navigation
+# UI Blocking for Previously Enrolled Courses in Add/Drop
 
-## Problem
-**Jira**: [DPBFAD-920](https://insead.atlassian.net/browse/DPBFAD-920)
+## Summary
+Jira: 
+- https://insead.atlassian.net/browse/DPBFAD-792
 
-In the student portal's pre-bidding step, after saving course rankings and navigating to other screens (like the profile), then returning to the bidding page, the saved course rankings were not visible in the "Your Ranked Courses" list. Users had to manually reload the entire page to see their saved changes. This was caused by the `activeCampaign` query having a long `staleTime` and `refetchOnMount: false`, which prevented it from re-fetching even after being invalidated by a save mutation.
+This PR improves the student experience during the Add/Drop phase by proactively blocking the selection of courses that have been previously enrolled. Instead of allowing students to select these courses and receiving a server-side error after submission, the UI now disables these options in the "Add Courses" dropdown with a clear explanation.
 
-## Goal
-- Ensure that the bidding page always displays the most up-to-date saved rankings when a student navigates back to it.
-- Maintain consistent data synchronization across all critical bidding and waitlist views.
+## Problem Context
 
-## Changes Made (bidding-web)
+Students were able to search for and select courses they had already enrolled in (either in previous programs or earlier in the current round). Attempting to save or submit these duplicate enrollments resulted in a confusing backend error message.
 
-### 1. `bidding-web/src/lib/api/queries/campaign.queries.ts`
-- Updated `campaignQueries.activeCampaign` and `campaignQueries.waitlistStatus` to include `refetchOnMount: true`.
-- This forces React Query to re-validate the data in the background whenever the component mounts if the query is marked as stale (which happens after any successful save or submission mutation).
+## What Changed
+
+### 1. `bidding-web/src/features/bidding/utils/validation.util.ts`
+- Updated `validateCourseAddition()` to check for `is_enrolled` status and `unavailable_reason`.
+- Previously, this only validated credit limits. It now serves as a robust guard for all addition-related business rules.
+
+### 2. `bidding-web/src/features/bidding/hooks/use-add-drop-waitlist-form.tsx`
+- Modified `handleAddCourse` to use the updated `validateCourseAddition` logic.
+- This ensures that even if a student attempts to add a course (e.g., via keyboard or past UI states), the system prevents it and shows a proactive error notification.
+
+### 3. `bidding-web/src/features/bidding/hooks/use-course-options.ts`
+- Leverages existing `is_enrolled` metadata from the API to set the `disabled` state on dropdown options.
+- Options now display "Previously Enrolled" as the reason when hovered/disabled.
 
 ## Impact
-- **No API changes required** — Frontend-only fix utilizing existing invalidation patterns.
-- **Improved UX** — Fixed the "disappearing rankings" bug; students now see their saved data immediately after navigating back to the bidding page.
-- **Improved Consistency** — The same synchronization logic is applied to the individual campaign detail and waitlist status views.
+- **Proactive Feedback**: Students immediately see which courses are unavailable and why.
+- **Reduced Errors**: Eliminates "Already Enrolled" server-side validation failures by preventing the action at the source.
 
 ## Testing / Verification Steps
-1. Navigate to the Pre-Bidding page for an active campaign.
-2. Add several courses and change their ranks.
-3. Click **Save** and wait for the "Ranking saved!" notification.
-4. Navigate to the **Profile** page or **Dashboard**.
-5. Navigate back to the **Bidding** page.
-6. Verify that a network request for the campaign detail is triggered and the "Your Ranked Courses" list correctly displays the previously saved ranks.
-7. Repeat the same flow for **Bid Submission** and **Waitlist** pages to ensure consistent behavior.
+1. Open the Add/Drop page for an active campaign.
+2. Click on the "Add Courses" selector.
+3. Search for a course you have already enrolled in.
+4. Verify that the course appears as disabled in the list with the title "Previously Enrolled".
+5. Verify that attempting to add the course (if somehow possible) results in a toast notification: "Course [Name] has been previously enrolled."

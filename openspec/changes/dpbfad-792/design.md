@@ -3,7 +3,10 @@
 ### `BidValidator`
 - **Path:** `bidding-api/src/Domain/Campaign/ActiveCampaign/Validator/BidValidator.php`
 - **Purpose:** Validate student bids during the Bidding phase.
-- **Changes:** Add a validation rule to prevent students from submitting a bid for a course if they already have an existing bid for the exact same course in a concurrent active parallel bidding module within the same Program. Update `validate()` to invoke `validateNoParallelRoundDuplicates(...)`.
+- **Changes:**
+  - **Cross-Round Duplicates:** Update `validateNoParallelRoundDuplicates(...)` to skip validation for bids with `bidType === 'backup'`. This allows students to select courses in backup that they have already submitted/selected in another parallel bidding round.
+  - **Submission Duplicates:** Update `validateNoDuplicates(...)` to allow selecting the same `courseId` multiple times only if they are different `classId`s AND at least one of them is a backup.
+  - **Time Conflicts:** (Already handled) Ensure `validateTimeConflicts()` continues to ignore backup bids when evaluating schedule overlaps.
 
 ### `BidRepository`
 - **Path:** `bidding-api/src/Repository/BidRepository.php`
@@ -28,11 +31,13 @@
   - Uncomment/enable `validateBidPoints()` during submission.
   - Update `findOneBy` queries fetching drop bids so they explicitly accept and filter by the active module ID (`$moduleId`), preventing cross-module drop accidents.
 
-### `StudentData` Interactions & Error Handling
-- **Path:** Various domain services.
-- **Purpose:** Extract data from `StudentData` payload cleanly without null crashes.
+### `bidding-web` (Frontend UI Blocking)
+- **Path:** `bidding-web/src/components/AddDrop/AddDropModal.tsx` (and related list components)
+- **Purpose:** Manage the course selection interface for students.
 - **Changes:**
-  - Use `null-safe` operators or defaults (`?? 0`) when calculating summaries for audits and verifying point limits.
+  - Update the course selection list to check against the student's existing enrollments (already provided via initial state/API).
+  - Disable or hide "Add" buttons/checkboxes for courses the student is already enrolled in for this program.
+  - Provide a clear tooltip or visual indicator (e.g. "Already Enrolled") instead of allowing interaction and failing later with a toast error.
 
 ## State Management
 
@@ -42,6 +47,6 @@
 
 ## Internal APIs
 
-- `BidValidator->validate()`: Invoked early during `CreateBiddingService->submit()`. Throw exceptions explicitly highlighting parallel bid duplicate errors.
+- `BidValidator->validate()`: Invoked early during `CreateBiddingService->submit()`. Throw exceptions explicitly highlighting parallel bid duplicate errors for primary bids.
 - `AddDropService->submitAddDrop()`: Checks new validation rules early; explicitly maps over drops and adds with module-scoped constraints.
 - `AddDropValidator->validateNoUnresolvedDuplicateEnrollments()`: Evaluates pending/unresolved duplicates. Stops execution directly if discrepancies exist.
