@@ -9,7 +9,7 @@
 - **Path:** `bidding-api/src/Repository/BidRepository.php`
 - **Purpose:** Provide database queries for `Bid` entities.
 - **Changes:**
-  - Add `findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` to retrieve course IDs that the student has placed bids on in other parallel bidding campaigns within the same program. Use `BidStatus::PENDING` (not `BidStatus::SUBMITTED`, which does not exist in the enum) to filter for bids in the submitted/active state during the Bidding phase.
+  - Add `findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` to retrieve course IDs that the student has placed bids on in other parallel bidding campaigns within the same program. Use `BidStatus::SELECTED` (not `BidStatus::SUBMITTED`, which does not exist in the enum) to filter for bids in the submitted/active state during the Bidding phase.
   - Add `findDuplicateEnrolledCoursesByStudentAndCampaign()` to query same-campaign duplicate entries with optional `$moduleId` scoping.
   - Fix incorrect DQL field reference `b.moduleId` → `b.campaignModule` in the exclude-module clause of `findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`. The `Bid` entity has no `moduleId` field; the correct association is `campaignModule`.
 

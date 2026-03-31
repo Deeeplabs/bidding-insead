@@ -61,7 +61,7 @@ In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could in
    - Added `BidValidator::validateNoParallelRoundDuplicates()` evaluating prior PENDING selections to robustly block users from placing new requests on duplicated courses during the immediate Bidding Phase.
 
 7. **Fix undefined `BidStatus::SUBMITTED` enum reference**
-   - Replaced `BidStatus::SUBMITTED` with `BidStatus::PENDING` in `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`. The `BidStatus` enum has no `SUBMITTED` case; bids during the Bidding phase are stored with status `PENDING` (value `10`). The previous code caused a fatal PHP `Error` on every bid submission attempt.
+   - Replaced `BidStatus::SUBMITTED` with `BidStatus::SELECTED` in `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`. The `BidStatus` enum has no `SUBMITTED` case; bids during the Bidding phase are initially stored with status `SELECTED` (value `1`). The previous code caused a fatal PHP `Error` on every bid submission attempt.
 
 8. **Fix incorrect DQL field `b.moduleId` → `b.campaignModule`**
    - Replaced `b.moduleId` with `b.campaignModule` in the exclude-module clause of `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()`. The `Bid` entity has no `moduleId` property; the correct ManyToOne association is `campaignModule` (column `campaign_module_id`). This resolved the `[Semantical Error] line 0, col 200` that occurred on bid submission.
