@@ -1,13 +1,14 @@
-# Duplicate Course Verification & Enrollment Capital Null Safety in Add/Drop
+# Duplicate Course Verification & Enrollment Capital Null Safety in Bidding and Add/Drop
 
 ## Summary
 Jira: https://insead.atlassian.net/browse/DPBFAD-792
 
-This PR addresses critical validation gaps and runtime crash risks in the Add/Drop & Waitlist phase:
+This PR addresses critical validation gaps and runtime crash risks across the Bidding and Add/Drop & Waitlist phases:
 1. Prevents `Call to a member function getRemainingCapital() on null` errors when a `StudentData` record is missing.
-2. Enforces mandatory resolution of pre-existing duplicate course enrollments stemming from parallel bidding rounds.
+2. Enforces mandatory resolution of pre-existing duplicate course enrollments stemming from parallel bidding rounds during Add/Drop.
 3. Enables strict capital (bid points) validation which was previously bypassed, blocking negative capital submissions.
 4. Aligns and documents existing duplicate-course validation guardrails (cross-module and same-request duplicates) with robust test coverage.
+5. Introduces strict validation during the active Bidding phase to prevent students from submitting bids for the same exact course across multiple active parallel bidding rounds (e.g., BIDDING1 and BIDDING2).
 
 ## Problem Context
 
@@ -19,6 +20,9 @@ In parallel bidding campaigns (multiple modules), students can legitimately end 
 
 ### 3. Capital (Bid Points) Check Disabled
 `AddDropValidator::validateBidPoints()` had correct logic but was never called in `AddDropService::submitAddDrop()`. This loophole allowed submissions resulting in negative bid point balances.
+
+### 4. Direct Duplicate Submission in Parallel Bidding Modules
+In a campaign with parallel bidding modules (BIDDING1, BIDDING2), users could independently submit bids for the identical course in both modules. There was no cross-module evaluation of open bids to halt duplicate course selections until after bids were computed to enrollments.
 
 ## What Changed
 
@@ -44,12 +48,16 @@ In parallel bidding campaigns (multiple modules), students can legitimately end 
    - Rejects adding multiple sections of the same course within singular submissions.
    - Checks campaign-scoped prior module additions (e.g., Add/Drop 1 courses cannot be added in Add/Drop 2 unless dropped).
 
+6. **Cross-Round Duplicate Submission Prevention (`BidValidator`)**
+   - Implemented `BidRepository::findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` to query for courses actively bidded on in parallel bidding round modules.
+   - Added `BidValidator::validateNoParallelRoundDuplicates()` evaluating prior PENDING selections to robustly block users from placing new requests on duplicated courses during the immediate Bidding Phase.
+
 ## Impact & Behavioral Changes
 
 - **API response & Database Schema:** Unchanged.
 - **Null Safety:** Missing `studentData` degrades gracefully to `0` values rather than throwing HTTP 500s.
 - **Capital Constraints:** Users can no longer exploit Add/Drop with underfunded capital.
-- **Duplicates:** Students entering Add/Drop with multi-round duplicates are forced to resolve them before any new changes apply.
+- **Duplicates:** Students entering Add/Drop with multi-round duplicates are forced to resolve them before any new changes apply. Furthermore, Bidding users are halted from generating duplications spanning multiple modules prior to simulation.
 
 ## Tests Added/Updated
 
@@ -59,8 +67,10 @@ In parallel bidding campaigns (multiple modules), students can legitimately end 
    - Null-`studentData` bid-points pass/fail boundaries.
    - Insufficient capital rejections vs. pass-via-drop-refund.
    - Campaign-wide cross-module duplicate restrictions and same-submission duplication.
+3. `BidValidatorPreviousEnrollmentTest.php`:
+   - Enforce rejection upon detecting parallel bid submission on duplicated course across multiple modules.
 
 ## Verification
 
-- [x] All 4 entry point controllers verified conceptually (`StudentActiveCampaignController`, `CreateBiddingAddDropController`, `CampusExchangeAddDropWaitlistController`, `CampusExchangeAddDropAllotmentController`).
-- [x] `cmd /c vendor\bin\phpunit tests\Unit\Domain\Campaign\ActiveCampaign\AddDropServiceNullSafetyTest.php tests\Unit\Domain\Campaign\ActiveCampaign\Validator\AddDropValidatorPreviousEnrollmentTest.php`
+- [x] All entry point controllers verified conceptually.
+- [x] PHPUnit suite tests run and passed cleanly.

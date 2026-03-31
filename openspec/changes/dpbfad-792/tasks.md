@@ -21,10 +21,18 @@
 - [x] 3.3 Capital validation: Add/update `AddDropValidatorPreviousEnrollmentTest` scenarios for null `studentData` bid-point passes, negative capital rejection, and drop-refund offset successes.
 - [x] 3.4 Cross-Module Duplicates: Add tests for `validateNoDuplicateCoursesWithCurrentEnrollment()` cross-module detection, same-submission duplicate rejection, and drop-then-add parity.
 
-## 4. Verification
+## 4. Parallel Bidding Submission Validation (New)
 
-- [x] 4.1 Run PHPUnit tests covering `AddDropServiceNullSafetyTest.php` and `AddDropValidatorPreviousEnrollmentTest.php`.
-- [x] 4.2 Manually verify parallel bidding duplicate forces drop.
-- [x] 4.3 Manually verify Add/Drop 1 course blocked in Add/Drop 2.
-- [x] 4.4 Manually verify negative capital submission is blocked.
-- [x] 4.5 Manually verify dropping courses exclusively targets the submitted bidding round via QA video assessment.
+- [x] 4.1 Provide new query `findSubmittedCourseIdsInParallelRoundsByStudentAndProgram` in `bidding-api/src/Repository/BidRepository.php` to fetch course IDs that the given student has submitted across currently running parallel bidding rounds in the current Program (excluding the current module ID).
+- [x] 4.2 Add `validateNoParallelRoundDuplicates(array $newBids, Student $student, Campaign $campaign, int $activeModuleId)` to `bidding-api/src/Domain/Campaign/ActiveCampaign/Validator/BidValidator.php`.
+- [x] 4.3 Invoke `validateNoParallelRoundDuplicates()` from within `BidValidator->validate()` to reject the overall bid submission if cross-round duplicates are detected.
+- [x] 4.4 Bidding cross-round duplicates: Add test scenarios to `BidValidatorTest` to cover parallel bidding duplicate submission prevention.
+
+## 5. Verification
+
+- [x] 5.1 Run PHPUnit tests covering `AddDropServiceNullSafetyTest.php` and `AddDropValidatorPreviousEnrollmentTest.php`.
+- [x] 5.2 Manually verify parallel bidding duplicate forces drop.
+- [x] 5.3 Manually verify Add/Drop 1 course blocked in Add/Drop 2.
+- [x] 5.4 Manually verify negative capital submission is blocked.
+- [x] 5.5 Manually verify dropping courses exclusively targets the submitted bidding round via QA video assessment.
+- [x] 5.6 Manually verify submitting a course in BIDDING1 restricts the same course submission in BIDDING2.

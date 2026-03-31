@@ -1,54 +1,44 @@
-## Context
+## Components
 
-The bidding system Add/Drop & Waitlist phase has several missing guardrails and a runtime crash vulnerability:
-1. **Parallel Pre-bidding Duplicates**: Students with duplicate ENROLLED bids for the same course from separate parallel bidding rounds were not forced to drop one before submitting Add/Drop requests.
-2. **Capital Validation Disabled**: `validateBidPoints()` was implemented but commented out, allowing submissions to result in negative capital.
-3. **Missing Null Safety**: `Student::getStudentData()` is nullable, but was dereferenced directly in Add/Drop summary calculation, audit payload generation, and bid point validation, causing `Call to a member function getRemainingCapital() on null`.
-4. **Duplicate Safeguards**: Cross-module and same-submission duplicate add/drop validations were present but lacked formal coverage and artifact documentation.
-5. **Drop Targeting Flaws**: Dropping courses in `bid2` would erroneously drop identical course enrollments belonging to `bid1`.
+### `BidValidator`
+- **Path:** `bidding-api/src/Domain/Campaign/ActiveCampaign/Validator/BidValidator.php`
+- **Purpose:** Validate student bids during the Bidding phase.
+- **Changes:** Add a validation rule to prevent students from submitting a bid for a course if they already have an existing bid for the exact same course in a concurrent active parallel bidding module within the same Program. Update `validate()` to invoke `validateNoParallelRoundDuplicates(...)`.
 
-## Goals / Non-Goals
+### `BidRepository`
+- **Path:** `bidding-api/src/Repository/BidRepository.php`
+- **Purpose:** Provide database queries for `Bid` entities.
+- **Changes:** Add a custom query method (e.g., `findSubmittedCourseIdsInParallelRoundsByStudentAndProgram`) to retrieve course IDs that the student has placed bids on in other parallel bidding campaigns within the same program.
 
-**Goals:**
-- Prevent Add/Drop progression if unresolved duplicate course enrollments exist from parallel bidding.
-- Enable capital (bid points) validation to block negative capital submissions.
-- Eliminate null-dereference failures by centralizing a financial fallback helper (`getStudentFinancialSnapshot`) and using null-safe operators.
-- Ensure cross-module duplicate detection and drop-then-add logic works as intended and is covered by tests.
-- Isolate drop operations and capital refund queries to the active module (`$moduleId`) so parallel bidding rounds don't intersect.
-- Keep duplicate-course guardrail behavior explicit in regression tests.
+### `AddDropValidator`
+- **Path:** `bidding-api/src/Domain/Campaign/ActiveCampaign/Validator/AddDropValidator.php`
+- **Purpose:** Validates add/drop and waitlist requests before they are explicitly executed.
+- **Changes:**
+  - Introduce `validateNoUnresolvedDuplicateEnrollments(Student $student)` to check if the student has multiple ENROLLED/SELECTED bids for the same course in parallel bidding campaigns whose duplicates haven't been resolved with drops.
+  - Fix `validateNoDuplicateCoursesWithCurrentEnrollment` to block adding a course in Add/Drop 2 if the same course is selected in Add/Drop 1 but the module ID query didn't restrict them previously. Scope it better.
 
-**Non-Goals:**
-- Preventing parallel bidding rounds from generating duplicate enrollments initially (allowed by design).
-- Modifying database schema or API response shapes.
-- Refactoring `studentData` dereferencing outside of Add/Drop hot paths.
+### `AddDropService`
+- **Path:** `bidding-api/src/Domain/Campaign/ActiveCampaign/AddDropService.php`
+- **Purpose:** Handles the business logic for the Add/Drop phase, including applying drops, additions, point refunds, and logging.
+- **Changes:**
+  - Add `getStudentFinancialSnapshot(Student $student)` for safe retrieval of points and capital.
+  - Uncomment/enable `validateBidPoints()` during submission.
+  - Update `findOneBy` queries fetching drop bids so they explicitly accept and filter by the active module ID (`$moduleId`), preventing cross-module drop accidents.
 
-## Decisions
+### `StudentData` Interactions & Error Handling
+- **Path:** Various domain services.
+- **Purpose:** Extract data from `StudentData` payload cleanly without null crashes.
+- **Changes:**
+  - Use `null-safe` operators or defaults (`?? 0`) when calculating summaries for audits and verifying point limits.
 
-### 1. Unresolved Duplicate Detection (`AddDropValidator` & `BidRepository`)
-- Add `findDuplicateEnrolledCoursesByStudentAndCampaign(Student $student, Campaign $campaign, ?int $moduleId = null)` to `BidRepository`. This query groups ENROLLED/SELECTED bids by `course_id` and returns those with `COUNT > 1`. When `$moduleId` is provided, only checks duplicates within that specific module.
-- Add `validateNoUnresolvedDuplicateEnrollments(array $drops, Student $student, Campaign $campaign, ?int $moduleId = null)` to `AddDropValidator`. It checks if any identified duplicates remain unresolved after applying the current request's drops. Throws `\DomainException` if so. When `$moduleId` is provided, only validates within that module's scope.
-- This runs *before* other enrollments checks in `AddDropService::submitAddDrop()`.
-- **Critical Fix**: The validation now correctly scopes to the current bidding round (bid1 or bid2) using `$moduleId`, preventing Add/Drop in bid2 from seeing duplicates from bid1.
+## State Management
 
-### 2. Enable Capital Validation
-- Uncomment `$this->validator->validateBidPoints(...)` in `AddDropService::submitAddDrop()`. It runs after `validateCreditLimits()` and is guarded by `!empty($enrollments)`.
+- **Database:** Preserved as is. Logic simply validates and rejects states that breach new duplication/capital rules, or strictly scopes database `UPDATE`s to the correct `active_module_id`.
+- **Bid Points (Capital):** Refund computations are isolated to the specific transaction module, guaranteeing users get points refunded strictly for the module they dropped courses in.
+- **Errors:** Throw `DomainException` to safely reject bad or duplicate requests across all Add/Drop, Waitlist, and Bidding controllers.
 
-### 3. Null-Safe Financial Fallback
-- Add `getStudentFinancialSnapshot(Student $student): array{credits_taken: float, remaining_capital: int}` to `AddDropService`.
-- Defaults to `credits_taken = 0.0` and `remaining_capital = 0` if `studentData` is null.
-- Use this snapshot in `buildResponse()` and `createAuditLog()`.
-- Update `validateBidPoints()` to use `$student->getStudentData()?->getRemainingCapital() ?? 0`.
+## Internal APIs
 
-### 4. Module-Scoped Add/Drop Filtering
-- Pass `$moduleId` into `buildResponse()`, `validateBidPoints()`, and drop tracking.
-- Apply `['campaignModule' => $moduleId]` to `findOneBy()` array limits. This precisely locks operations to the round the student interacts with, resolving cross-module drop bugs.
-
-### 5. Lock in Existing Duplicate Guardrails
-- Verify and test existing `validateNoDuplicateCoursesInSubmission` (same-submission duplicates) and `validateNoDuplicateCoursesWithCurrentEnrollment` (campaign-scoped, cross-module duplicates).
-- Ensure drop-then-add of the same course in one request is correctly permitted.
-
-## Risks / Trade-offs
-
-- **Strictness Trade-off**: Enabling capital validation and enforcing duplicate course resolution will block previously allowed invalid flows. This is desired but might surprise users.
-- **Fallback Semantics**: Missing `studentData` gracefully degrading to zero prevents crashes but might obscure underlying data issues. A follow-up to harden hotspots or validate data integrity may be useful.
-- **Performance**: One additional `GROUP BY` database query per submission, which is negligible.
+- `BidValidator->validate()`: Invoked early during `CreateBiddingService->submit()`. Throw exceptions explicitly highlighting parallel bid duplicate errors.
+- `AddDropService->submitAddDrop()`: Checks new validation rules early; explicitly maps over drops and adds with module-scoped constraints.
+- `AddDropValidator->validateNoUnresolvedDuplicateEnrollments()`: Evaluates pending/unresolved duplicates. Stops execution directly if discrepancies exist.

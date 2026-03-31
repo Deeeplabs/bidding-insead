@@ -1,6 +1,6 @@
 ## Why
 
-Three issues exist in the Add/Drop & Waitlist phase:
+Four issues exist across the Bidding and Add/Drop & Waitlist phases:
 
 ### 1. Duplicate Course Enrollments from Parallel Bidding Rounds Not Forced to Resolve
 In a campaign with parallel bidding, a student can bid on the same course in both rounds. After simulation, both bids can result in ENROLLED status, creating two ENROLLED bids for the same course in the same campaign. The current system has no validation that forces the student to drop one of these duplicates before proceeding with Add/Drop submissions. `validateNoDuplicateCoursesWithCurrentEnrollment()` correctly blocks adding new duplicates, but doesn't force resolution of pre-existing ones.
@@ -15,6 +15,9 @@ Submitting Add/Drop & Waitlist could fail with a fatal error: `Call to a member 
 ### 4. Module-Scoped Drop Targeting Flaw
 Dropping courses in one parallel bidding round (e.g., `bid2`) erroneously targeted and dropped identical course enrollments from another round (e.g., `bid1`). Drop queries and point refund calculations implicitly fetched the first available bid without scoping it to the active module.
 
+### 5. Duplicate Submission in Parallel Bidding Rounds
+Users are able to submit bids for the same exact course across multiple parallel bidding rounds (e.g., BIDDING1 and BIDDING2) during the Bidding phase. There's no cross-round validation to prevent a user from selecting a course in BIDDING2 that they have already submitted/selected in BIDDING1.
+
 ## What Changes
 
 1. **Force resolution of parallel bidding duplicates**: Before processing any add/drop submission, detect if the student has multiple ENROLLED/SELECTED bids for the same course. If unresolved duplicates exist and the student's drops don't resolve them, reject the submission.
@@ -22,11 +25,13 @@ Dropping courses in one parallel bidding round (e.g., `bid2`) erroneously target
 3. **Enable capital validation**: Uncomment/enable the `validateBidPoints()` call in `submitAddDrop()` to prevent negative capital.
 4. **Add null-safe financial snapshot handling**: Introduce `getStudentFinancialSnapshot(Student $student)` in `AddDropService` to safely read credits/capital with defaults. Use this snapshot for response calculations and audit logs. Harden `validateBidPoints()` to read capital via null-safe access.
 5. **Isolate drop operations by module**: Pass `$moduleId` into `findOneBy()` queries within `AddDropService` and `AddDropValidator` to guarantee drops, responses, and capital refunds strictly affect the active module.
-6. **Add regression tests**: Cover duplicate course resolution, capital validation, and null `studentData` behaviors.
+6. **Cross-round Bidding duplicate prevention**: Add validation in `BidValidator` during the Bidding phase to retrieve the student's bids in parallel rounds (using a new query in `BidRepository`) and throw an exception if they are trying to bid on a course they already bidded on.
+7. **Add regression tests**: Cover duplicate course resolution, capital validation, null `studentData` behaviors, and cross-round Bidding duplicates.
 
 ## Capabilities
 
 ### New Capabilities
+- `bidding-duplicate-course-prevent`: Prevent users from bidding on the same course across parallel bidding rounds during the Bidding phase.
 - `add-drop-duplicate-course-check`: Detect and reject duplicate courses during Add/Drop, including unresolved duplicate enrollments from parallel bidding, cross-module duplicate prevention, and same-submission duplication.
 - `add-drop-studentdata-null-safety`: Add/Drop submission and validation safely handle missing `StudentData` without fatal errors.
 - `enforce-capital-validation`: Capital validation is enforced during Add/Drop submissions.
@@ -41,6 +46,7 @@ Dropping courses in one parallel bidding round (e.g., `bid2`) erroneously target
 - **Affected domain services:**
   - `App\Domain\Campaign\ActiveCampaign\AddDropService`
   - `App\Domain\Campaign\ActiveCampaign\Validator\AddDropValidator`
+  - `App\Domain\Campaign\ActiveCampaign\Validator\BidValidator`
   - `App\Repository\BidRepository`
 - **API contract impact:** None. Validation errors use existing `\DomainException` pattern.
 - **Database migration required:** No.
