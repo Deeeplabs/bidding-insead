@@ -1,25 +1,18 @@
-# BP Dashboard — Promotion Card Data Source Fix
+# Campaign Dashboard — Add Scroll Bar for Campaign Card
 
 ## Problem
-The "Promotion" MetricCard in the Programme Governance Overview section displays `programme_governance_overview.programme_operations` from the API response. This field actually returns the count of Tier 2 Programme Operators — not the number of promotions. As a result the dashboard shows **1** while there are **5+** active promotions for the selected programme.
+The campaign card in the Admin Dashboard renders all bidding rounds and phases in a horizontal flex row. When a campaign has many rounds (e.g. 7+ Elective_recovery rounds), the content overflows the card boundary with no scroll mechanism, making right-side phases inaccessible.
 
 ## Goal
-Update the "Promotion" card to read the new `promotions` field from the API response, which returns the actual count of active Promotion entities (added in the companion `bidding-api` PR).
+Add horizontal scrolling to the campaign modules row so that all bidding rounds and their phases are accessible regardless of how many rounds a campaign has.
 
 ## Changes Made
 
-1. **`src/components/dashboard/dashboard-business-partner.tsx`**
-   - Changed the "Promotion" MetricCard value from `bpStats?.programme_governance_overview?.programme_operations` to `bpStats?.programme_governance_overview?.promotions`.
-
-2. **`src/src/dashboard/stats.types.ts`**
-   - Added `promotions: number` to the `programme_governance_overview` type in `BPStatsResponse`.
-
-## Depends On
-- **bidding-api PR**: Adds the `promotions` field to `GET /dashboard/bp/stats` response. This admin PR must be deployed together with (or after) the API PR.
+1. **`src/components/campaign/box-campaign.tsx`**
+   - Added `overflow-x-auto pb-2` to the campaign modules container div, enabling horizontal scroll when content exceeds the card width. The `pb-2` provides spacing so the scrollbar doesn't overlap phase labels.
 
 ## Testing / Verification Steps
-1. Open the BP Dashboard and select a programme.
-2. Verify the "Promotion" card shows the correct count of active promotions for that programme.
-3. Compare against the promotion list visible in Create Campaign → Select Promotion dropdown — numbers should match.
-4. Verify "Total Users" equals the sum of Business Partners + Programme Managers + Programme Operators + Students.
-5. Verify "Students" matches the count shown on the Students tab.
+1. Open the Admin Dashboard with a campaign that has 7+ bidding rounds — confirm a horizontal scrollbar appears on the phases row and all rounds are reachable by scrolling.
+2. Confirm that campaigns with few bidding rounds show no scrollbar and the layout is unchanged.
+3. Confirm clicking a phase still navigates to the detail-bidding page correctly.
+4. Confirm the card header, stats boxes, dates, and overall page layout are unaffected.
