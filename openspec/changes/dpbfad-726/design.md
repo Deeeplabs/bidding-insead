@@ -1,76 +1,67 @@
 ## Context
 
-The INSEAD bidding system already supports direct enrollment during the Add/Drop phase via `AddDropService`. When a student adds a course and seats are available, the system assigns `ENROLLED` status immediately. However, several issues prevent this from working reliably:
+The INSEAD bidding system displays seat information in two contexts: the PM's admin dashboard (bidding-admin) and the student portal (bidding-web). Currently, the student-facing `CourseOptionContent.tsx` shows a dynamic chip (`available_seats/total_seats seats`) that updates as students enroll — revealing remaining seat counts in real-time. The PM's dashboard (`course-table-bidding-round.tsx`) shows a "Seat Available" column that displays `XX (XX)` whenever `total_all_seats !== total_seats`, which is not the correct condition for the split format.
 
-1. **Silent course exclusion**: `AddDropAvailableCourseService` (lines 74-102) and `CampaignCourseService` (lines 48-256) apply filters (class status, promotion matching, ClassPromotions existence, non-zero seat checks) that silently exclude courses with available seats when configuration is incomplete or mismatched.
-2. **No concurrency protection**: `AddDropService.executeCampaignAddDrop()` reads seat counts and creates bids without any database-level locking, allowing race conditions where two students both see 1 available seat and both enroll.
-3. **Limited discoverability**: The student UI (`CourseSelector.tsx`) shows available courses in a dropdown but does not highlight seat availability or allow filtering/sorting by available seats.
-4. **No real-time feedback**: After enrollment, the course list is not automatically refreshed — students may see stale seat counts until they navigate away and back.
+The updated requirement is:
+1. **Students** see only a single static total-seats value during both Bidding Round and Add/Drop — never remaining seats or consumption.
+2. **PM dashboard** shows `XX` for non-shared courses and `XX (XX)` only when a course is genuinely shared/split across multiple programme-promotions.
+3. **Backend** continues to enforce real-time seat validation to prevent over-enrollment, returning a clear error when a course is full.
 
-**Affected apps**: bidding-api, bidding-web. bidding-admin is not directly affected.
+**Affected apps**: bidding-web (student seat display), bidding-admin (PM seat column format), bidding-api (ensure proper data for split detection + enrollment validation).
 
 ## Goals / Non-Goals
 
 **Goals:**
-- Fix course filtering bugs so all courses with available seats appear in the add/drop course list
-- Add pessimistic locking to prevent seat over-allocation during concurrent enrollments
-- Surface seat availability (available/total) per section in the student add/drop UI
-- Allow students to filter/sort courses by seat availability
-- Invalidate React Query cache after enrollment to show updated seat counts immediately
+- Replace dynamic seat chip in student UI with a static total-seats-only display
+- Fix PM dashboard seat column to show `XX (XX)` only for courses shared across multiple programme-promotions
+- Ensure backend enrollment validation prevents over-enrollment with clear error messaging
+- Apply to both Bidding Round and Add/Drop phases consistently
 
 **Non-Goals:**
-- WebSocket/push-based real-time seat updates (polling on form interaction is sufficient)
-- Changing the bidding phase behavior (only add/drop phase is in scope)
-- Modifying the simulation engine or waitlist auto-promotion logic
-- Admin-side UI changes
-- Changing the `isFree` bid mechanics or capital allocation rules
+- Adding new seat-related API fields (existing fields are sufficient)
+- Adding sort/filter by availability (students should not see availability)
+- Changing the simulation engine, waitlist logic, or capital allocation rules
+- Modifying webhook contracts or MuleSoft integrations
+- Real-time push/WebSocket updates (not needed since display is static)
 
 ## Decisions
 
-### Decision 1: Fix filtering in AddDropAvailableCourseService with defensive fallbacks
+### Decision 1: Static seat display in student UI — show only `total_seats`
 
-**Choice**: Add fallback logic so that when `ClassPromotions` records are missing or promotion matching fails, the system logs a warning but still includes the course if seats are available (via `SimulationAdjustmentCourse` or `AdjustmentCourse` seat overrides).
+**Choice**: In `CourseOptionContent.tsx`, replace the dynamic `{data.available_seats}/{data.total_seats} seats` chip with a static `{data.total_seats} seats` chip. Remove conditional coloring based on `available_seats > 0`. The chip always shows the configured total capacity in a neutral style.
 
-**Why not just fix the data?** Data configuration issues will recur with each new campaign. A defensive backend that logs warnings but doesn't silently hide courses is more resilient. The root filtering logic should still prefer ClassPromotions-based seats when available, but fall back gracefully.
+**Why not remove the chip entirely?** Students still need to know how many seats the course offers to make informed decisions. The requirement states students should see the "total number of seats offered" — just not remaining/consumed counts.
 
-**Alternative considered**: Strict data validation at campaign creation time. Rejected because it doesn't fix courses already in-flight and adds admin friction.
+**Alternative considered**: Removing `available_seats` and `enrolled_count` from the API response entirely. Rejected because this would be a breaking API change and other consumers (admin views, reports) may use these fields. Instead, we only change what the student UI renders.
 
-### Decision 2: Pessimistic locking with SELECT ... FOR UPDATE on seat check
+### Decision 2: PM dashboard split format based on class promotion count
 
-**Choice**: Wrap the seat availability check and bid creation in `AddDropService` within a single database transaction with `SELECT ... FOR UPDATE` on the relevant `Bid` rows for the class being enrolled. This prevents concurrent reads from seeing the same seat count.
+**Choice**: In `course-table-bidding-round.tsx`, the current condition `row.total_all_seats && row.total_all_seats !== row.total_seats` is incorrect — it shows the split format whenever the values differ, even for non-shared courses. Replace this with a check for whether the course is associated with multiple programme-promotions.
 
-**Why pessimistic over optimistic?** Add/drop operations are relatively low-frequency (not thousands per second), and pessimistic locking provides a stronger guarantee. Optimistic locking (version column) would require retry logic in the controller and a more complex error-handling path for the student.
+**Implementation approach**: The API already provides `total_seats` (adjusted/promotion-specific) and `total_all_seats` (sum across all promotions from `ClassPromotions`). A course is "shared/split" when it has `ClassPromotions` records across more than one programme-promotion. Add an `is_shared` boolean to `AdminBiddingRoundCourseDto` computed from `count(ClassPromotions) > 1` or `count(distinct promotions) > 1`. The admin frontend uses `is_shared` to decide the format:
+- `is_shared === false` → display `total_seats`
+- `is_shared === true` → display `total_seats (total_all_seats)`
 
-**Implementation**: Use Doctrine's `LockMode::PESSIMISTIC_WRITE` in the repository method that counts enrolled bids for a class. The lock is held only for the duration of the enrollment transaction (milliseconds).
+**Why a dedicated boolean over reusing existing fields?** The current heuristic (`total_all_seats !== total_seats`) is unreliable. A course may have a single promotion but an adjusted seat capacity that differs from the original. An explicit `is_shared` flag is unambiguous.
 
-**Alternative considered**: Redis-based distributed lock. Rejected because MySQL transactions are sufficient for single-instance API and add no new infrastructure dependency.
+### Decision 3: Preserve backend enrollment validation as-is
 
-### Decision 3: Add seat availability fields to existing available-course response DTO
+**Choice**: The existing `AddDropService.executeCampaignAddDrop()` already has pessimistic locking (`SELECT ... FOR UPDATE`) and seat capacity checks. No changes needed to the validation logic itself. Only verify that when seats are exhausted, the error message returned to the student is clear (e.g., "Course is full" or equivalent).
 
-**Choice**: Add `available_seats`, `total_seats`, and `enrolled_count` fields to the existing `AddDropAvailableCourseDto` response. These are additive fields — no existing fields are removed or renamed.
+**Why no changes?** The backend already correctly prevents over-enrollment. The previous implementation tasks (2.1, 2.2) added pessimistic locking. The concern now is purely about what the UI displays — the backend is sound.
 
-**Why not a separate endpoint?** The data is already computed in `AddDropAvailableCourseService` (lines 291-330). Adding it to the existing response avoids an extra API call and keeps the frontend simple.
+### Decision 4: Scope includes both Bidding Round and Add/Drop
 
-### Decision 4: Add sort/filter query parameters to available-courses endpoint
+**Choice**: Apply static seat display to both phases. In `CourseOptionContent.tsx`, the seat chip is used in both the bidding round course selector and the add/drop course selector (via `CourseSelector.tsx` → `ClassSelector.tsx`). A single change to `CourseOptionContent.tsx` covers both phases.
 
-**Choice**: Add optional `sort_by` (e.g., `available_seats_desc`, `course_name_asc`) and `availability` (e.g., `available`, `all`) query parameters to `AddDropAvailableCourseController`. Default behavior is unchanged (`all` courses, existing sort order).
-
-**Why query parameters over client-side filtering?** The available courses endpoint is paginated (infinite scroll). Client-side filtering/sorting would only work on the loaded page, not the full dataset. Server-side ensures correct results across pages.
-
-### Decision 5: React Query cache invalidation after enrollment mutation
-
-**Choice**: After a successful add/drop submission, invalidate the `addDropAvailableCourses` query key so the course list refetches with updated seat counts. Also invalidate the student's enrollment list query.
-
-**Why not optimistic updates?** Seat counts depend on server-side calculation (simulation adjustments, adjustment overrides). Optimistic updates could show incorrect numbers. A refetch after mutation is more reliable and the latency is acceptable (< 1 second).
+**Why not phase-specific logic?** The same component (`CourseOptionContent`) renders course options in both contexts. Applying different display logic per phase would add unnecessary complexity and diverge from the PM's requirement of consistent static display across all phases.
 
 ## Risks / Trade-offs
 
-**[Risk] Pessimistic lock contention under high load** → Lock is scoped to a single class's bid rows and held for < 100ms. At INSEAD scale (hundreds, not thousands of concurrent users), contention is negligible. If it becomes an issue, the lock scope can be narrowed further.
+**[Risk] Students may not realize a course is full until they try to enroll** → This is by design per PM requirements. The system returns a clear error ("Course is full") at enrollment time. The UX trade-off is intentional: simplicity over real-time feedback.
 
-**[Risk] Defensive fallback may surface incorrectly configured courses** → The fallback adds a warning log. Admins should monitor logs and fix ClassPromotions configuration. The alternative (hiding courses) is worse for students.
+**[Trade-off] `is_shared` flag adds a new field to admin API response** → This is an additive change (no existing fields removed). The field is only used by the admin dashboard. If the admin frontend is not deployed simultaneously, the old behavior (showing `XX (XX)` based on value difference) continues until the frontend update is deployed.
 
-**[Risk] Cache invalidation causes brief loading state in UI** → After enrollment submission, the course list will briefly show a loading indicator while refetching. This is acceptable UX and clearly communicates that data is being updated.
+**[Trade-off] API still returns `available_seats` and `enrolled_count`** → These fields remain in the API response for backward compatibility and potential use by other consumers. Only the student UI stops rendering them. This avoids a breaking API change while achieving the desired UX.
 
-**[Trade-off] No real-time push updates** → Students must interact with the form (e.g., open course selector, scroll, search) to see updated seat counts. True real-time would require WebSocket infrastructure which is out of scope. The refetch-on-interaction approach is a pragmatic middle ground.
-
-**[Trade-off] Existing filter behavior changes for all campaigns** → Fixing the promotion matching fallback affects all active campaigns, not just new ones. This is intentional — the current silent exclusion is a bug, not a feature. But we should test against production data to ensure no unexpected courses surface.
+**[Risk] PM dashboard column label says "Seat Available" but now shows static configured capacity** → The column label may need updating to "Seats" or "Seat Capacity" to avoid confusion. This is a minor cosmetic change in `course-table-bidding-round.tsx`.

@@ -1,109 +1,76 @@
 ## ADDED Requirements
 
-### Requirement: Available courses with seats SHALL be discoverable
-The system SHALL return all course-sections with available seats in the add/drop available courses endpoint, regardless of whether `ClassPromotions` records are partially misconfigured. When seat capacity is determined via `SimulationAdjustmentCourse` or `AdjustmentCourse` overrides, the course SHALL be included even if `ClassPromotions`-based seat calculation returns zero. The system SHALL log a warning when falling back to override-based seat counts.
+### Requirement: Student seat display SHALL be static across Bidding Round and Add/Drop
+During both the Bidding Round and Add/Drop phases, students SHALL see only the total configured seat capacity for each course-section. The seat value displayed SHALL NOT change based on enrollment activity. Students SHALL NOT see remaining seats, enrolled counts, or any real-time seat consumption data.
 
-#### Scenario: Course with seats available via ClassPromotions is returned
-- **WHEN** a student requests available courses during the add/drop phase
-- **AND** a class has `ClassPromotions.promotionSeats > 0` matching the student's promotion
-- **AND** enrolled count is less than total seats
-- **THEN** the course-section SHALL appear in the available courses list with status `available`
+#### Scenario: Student sees static total seats during Bidding Round
+- **WHEN** a student views available courses during the Bidding Round phase
+- **THEN** each course-section SHALL display only `total_seats` as a static number
+- **AND** no `available_seats` or `enrolled_count` SHALL be rendered in the UI
+- **AND** the seat value SHALL NOT change as other students submit bids
 
-#### Scenario: Course with seats available via SimulationAdjustmentCourse override is returned
-- **WHEN** a student requests available courses during the add/drop phase
-- **AND** a class has no matching `ClassPromotions` record for the student's promotion
-- **AND** a `SimulationAdjustmentCourse` record exists with `seatCapacity > enrolledCount`
-- **THEN** the course-section SHALL appear in the available courses list with status `available`
-- **AND** the system SHALL log a warning indicating missing ClassPromotions configuration
+#### Scenario: Student sees static total seats during Add/Drop
+- **WHEN** a student views available courses during the Add/Drop phase
+- **THEN** each course-section SHALL display only `total_seats` as a static number
+- **AND** no `available_seats` or `enrolled_count` SHALL be rendered in the UI
+- **AND** the seat value SHALL NOT change as other students enroll or drop courses
 
-#### Scenario: Course with seats available via AdjustmentCourse override is returned
-- **WHEN** a student requests available courses during the add/drop phase
-- **AND** a class has no matching `ClassPromotions` record for the student's promotion
-- **AND** no `SimulationAdjustmentCourse` record exists
-- **AND** an `AdjustmentCourse` record exists with `seatCapacity > enrolledCount`
-- **THEN** the course-section SHALL appear in the available courses list with status `available`
-- **AND** the system SHALL log a warning indicating missing ClassPromotions configuration
+#### Scenario: Seat chip displays neutral styling regardless of capacity state
+- **WHEN** a course-section has `total_seats` configured
+- **THEN** the seat chip SHALL display `{total_seats} seats` with neutral styling
+- **AND** the chip SHALL NOT use green/red coloring based on availability
+- **AND** the chip SHALL NOT indicate whether seats are remaining or full
 
-#### Scenario: Course with zero capacity across all sources is excluded
-- **WHEN** a student requests available courses during the add/drop phase
-- **AND** a class has zero seats from `ClassPromotions`, no `SimulationAdjustmentCourse`, and no `AdjustmentCourse` override
-- **THEN** the course-section SHALL NOT appear in the available courses list
+### Requirement: PM dashboard SHALL display seat format based on course sharing
+The PM's dashboard course list SHALL display seat capacity in one of two formats depending on whether the course is shared across multiple programme-promotions. The format `XX (XX)` SHALL only appear when the course is genuinely split between programme-promotions.
 
-### Requirement: Real-time seat availability SHALL be displayed per section
-The available courses API response SHALL include `available_seats`, `total_seats`, and `enrolled_count` for each course-section. These values SHALL be computed in real-time from current database state (no caching). The existing response fields SHALL remain unchanged (additive only).
+#### Scenario: Non-shared course displays single seat value
+- **WHEN** a PM views the bidding round course list
+- **AND** a course-section is assigned to only one programme-promotion
+- **THEN** the "Seat Available" column SHALL display only `total_seats` (e.g., `48`)
+- **AND** the value SHALL NOT include parenthetical notation
 
-#### Scenario: Seat availability fields returned in available course response
-- **WHEN** the student requests available courses during the add/drop phase
-- **THEN** each course-section in the response SHALL include:
-  - `total_seats`: integer, total capacity from the highest-priority source (SimulationAdjustmentCourse > AdjustmentCourse > ClassPromotions)
-  - `available_seats`: integer, `total_seats - enrolled_count` (minimum 0)
-  - `enrolled_count`: integer, count of ENROLLED bids for this class in this campaign
-- **AND** all existing response fields SHALL remain present and unchanged
+#### Scenario: Shared course displays split seat format
+- **WHEN** a PM views the bidding round course list
+- **AND** a course-section is shared/split across multiple programme-promotions
+- **THEN** the "Seat Available" column SHALL display `total_seats (total_all_seats)` (e.g., `3 (42)`)
+- **AND** `total_seats` represents the promotion-specific allocated seats
+- **AND** `total_all_seats` represents the total capacity across all sharing promotions
 
-#### Scenario: Seat counts reflect most recent enrollment state
-- **WHEN** Student A enrolls in a section reducing available seats from 2 to 1
-- **AND** Student B subsequently requests the available courses list
-- **THEN** Student B SHALL see `available_seats: 1` for that section
+#### Scenario: Split format determined by class promotion count, not value difference
+- **WHEN** a course has `total_seats = 18` and `total_all_seats = 48`
+- **AND** the course has `ClassPromotions` records for multiple distinct promotions
+- **THEN** the PM dashboard SHALL display `18 (48)`
 
-### Requirement: Students SHALL be able to filter and sort courses by seat availability
-The available courses endpoint SHALL accept optional `availability` and `sort_by` query parameters. When omitted, existing default behavior SHALL be preserved.
+#### Scenario: Non-shared course with adjusted seats does not show split format
+- **WHEN** a course has `total_seats = 40` and `total_all_seats = 48`
+- **AND** the course has `ClassPromotions` records for only one programme-promotion
+- **AND** the difference is due to an `AdjustmentCourse` seat override
+- **THEN** the PM dashboard SHALL display only `40` (not `40 (48)`)
 
-#### Scenario: Filter to show only courses with available seats
-- **WHEN** a student requests available courses with `availability=available`
-- **THEN** only course-sections with `available_seats > 0` SHALL be returned
-- **AND** full (zero available seats) course-sections SHALL be excluded
+### Requirement: Backend SHALL enforce real-time enrollment validation
+The system SHALL validate seat capacity in real-time at the point of enrollment. Students SHALL be prevented from enrolling when the course is full. The validation SHALL be invisible to the student until they attempt to add a full course.
 
-#### Scenario: Filter to show all courses including full
-- **WHEN** a student requests available courses with `availability=all` or no `availability` parameter
-- **THEN** all course-sections SHALL be returned regardless of seat availability (existing behavior)
+#### Scenario: Enrollment succeeds when seats are available
+- **WHEN** a student submits an enrollment request for a course-section during Add/Drop
+- **AND** the current enrolled count is less than the total seat capacity
+- **AND** the student meets credit limits, has no timetable conflicts, and passes eligibility rules
+- **THEN** the enrollment SHALL succeed with ENROLLED status
+- **AND** the course SHALL appear in the student's enrollment list
 
-#### Scenario: Sort courses by available seats descending
-- **WHEN** a student requests available courses with `sort_by=available_seats_desc`
-- **THEN** course-sections SHALL be ordered by `available_seats` descending, with ties broken by course name ascending
+#### Scenario: Enrollment blocked when course is full
+- **WHEN** a student submits an enrollment request for a course-section during Add/Drop
+- **AND** the current enrolled count equals or exceeds total seat capacity
+- **THEN** the enrollment SHALL be rejected
+- **AND** the system SHALL return a clear error message (e.g., "Course is full")
+- **AND** the student SHALL NOT be enrolled
 
-#### Scenario: Default sort order preserved when sort_by omitted
-- **WHEN** a student requests available courses without a `sort_by` parameter
-- **THEN** existing sort order SHALL be preserved (no behavioral change)
-
-### Requirement: Concurrent enrollments SHALL NOT cause seat over-allocation
-The system SHALL use database-level pessimistic locking when checking seat availability and creating enrollment bids. Two students attempting to enroll in the last available seat simultaneously SHALL result in exactly one enrollment and one waitlist entry.
-
-#### Scenario: Two students enroll concurrently for last seat
+#### Scenario: Concurrent enrollments SHALL NOT cause over-allocation
 - **WHEN** a class has exactly 1 available seat
 - **AND** Student A and Student B both submit enrollment requests simultaneously
 - **THEN** exactly one student SHALL receive ENROLLED status
-- **AND** the other student SHALL receive WAITLISTED status with `waitlistRank = 1`
-- **AND** the class SHALL show `available_seats: 0` after both requests complete
-
-#### Scenario: Sequential enrollments decrement seats correctly
-- **WHEN** a class has 3 available seats
-- **AND** Student A enrolls successfully (ENROLLED)
-- **AND** Student B then enrolls successfully (ENROLLED)
-- **THEN** the class SHALL show `available_seats: 1`
-
-#### Scenario: Enrollment rejected when seats reach zero
-- **WHEN** a class has 0 available seats
-- **AND** a student submits an enrollment request for that class
-- **THEN** the student SHALL receive WAITLISTED status (not ENROLLED)
-- **AND** the student SHALL receive a waitlist rank
-
-### Requirement: Direct enrollment SHALL update student enrollment list immediately
-Upon successful enrollment (ENROLLED status), the course SHALL appear in the student's enrollment list without requiring manual refresh. The UI SHALL invalidate relevant cached data after enrollment submission.
-
-#### Scenario: Successful enrollment appears in enrollment list
-- **WHEN** a student enrolls in a course with available seats
-- **AND** the enrollment succeeds with ENROLLED status
-- **THEN** the student's enrollment list SHALL immediately include the newly enrolled course
-- **AND** the available courses list SHALL show the updated (decremented) seat count
-
-#### Scenario: Waitlisted enrollment appears in waitlist
-- **WHEN** a student adds a course with no available seats
-- **AND** the bid is created with WAITLISTED status
-- **THEN** the student's waitlist SHALL immediately include the course with its waitlist rank
-- **AND** the available courses list SHALL show `available_seats: 0` for that section
-
-### Requirement: Student eligibility rules SHALL be enforced before direct enrollment
-Direct enrollment SHALL be subject to existing eligibility constraints. The system SHALL prevent enrollment if any constraint is violated, returning a clear error message.
+- **AND** the other student SHALL be rejected with "Course is full" or receive WAITLISTED status
+- **AND** total enrolled count SHALL NOT exceed total seat capacity
 
 #### Scenario: Enrollment blocked when credit limit exceeded
 - **WHEN** a student attempts to enroll in a course
@@ -115,9 +82,21 @@ Direct enrollment SHALL be subject to existing eligibility constraints. The syst
 - **AND** the class schedule conflicts with another class the student is already enrolled in
 - **THEN** the enrollment SHALL be rejected with an error indicating a timetable conflict
 
-#### Scenario: Enrollment allowed when all eligibility rules pass
-- **WHEN** a student attempts to enroll in a course with available seats
-- **AND** the student's credit total is within limits
-- **AND** no timetable conflicts exist
-- **AND** the student has not already enrolled in or been waitlisted for the same course
-- **THEN** the enrollment SHALL succeed with ENROLLED status
+### Requirement: No UI element SHALL reveal real-time seat availability to students
+The student-facing UI SHALL NOT contain any visual indication of remaining seats, seat consumption, or real-time availability. This applies to all views in both Bidding Round and Add/Drop phases.
+
+#### Scenario: No remaining seat count shown in course selector
+- **WHEN** a student opens the course selector dropdown
+- **THEN** no course option SHALL display remaining or available seat counts
+- **AND** no course option SHALL display enrolled counts
+
+#### Scenario: No availability-based visual differentiation
+- **WHEN** a student views available courses
+- **THEN** courses SHALL NOT be color-coded or visually differentiated based on seat availability
+- **AND** there SHALL be no "full" or "available" badge derived from real-time seat data
+
+#### Scenario: API response fields preserved for backward compatibility
+- **WHEN** the API returns available course data to the student frontend
+- **THEN** the response MAY still include `available_seats`, `total_seats`, and `enrolled_count` fields
+- **AND** the student UI SHALL NOT render `available_seats` or `enrolled_count` to the user
+- **AND** only `total_seats` SHALL be used for display purposes

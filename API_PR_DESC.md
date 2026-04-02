@@ -1,56 +1,41 @@
-# Fix: Add/Drop Seat Availability & Concurrency Protection
+# Static Seat Display & PM Dashboard Seat Format Fix
 
 ## Problem
 Jira: [DPBFAD-726](https://insead.atlassian.net/browse/DPBFAD-726)
 
-During the Add/Drop phase, courses with available seats were not reliably surfaced to students. Multiple issues existed:
-
-1. **Silent course exclusion**: `AddDropAvailableCourseService` filtered out courses when `ClassPromotions` records were missing or promotion matching failed, even when seats were available via `SimulationAdjustmentCourse` or `AdjustmentCourse` overrides. `CampaignCourseService::buildAvailableCourse()` applied a strict non-zero `ClassPromotions.promotionSeats` filter at the query level, hiding these courses entirely.
-2. **No concurrency protection**: `AddDropService::executeCampaignAddDrop()` read seat counts and created bids without any database-level locking, allowing race conditions where two students both see 1 available seat and both enroll.
-3. **No server-side sort/filter by availability**: Students had no way to filter or sort courses by seat availability from the API. The existing `waitlist` boolean parameter only excluded full courses but did not support sorting.
+The PM's admin dashboard incorrectly shows the split seat format `XX (XX)` for courses whenever `total_all_seats !== total_seats`, even when the course is not genuinely shared across multiple programme-promotions. The condition should only trigger for courses split between promotions. Additionally, the API needs to provide an explicit `is_shared` flag so the admin frontend can correctly determine when to show the split format.
 
 ## Changes
 
-### 1. `AddDropAvailableCourseService.php` — Fix Available Course Filtering
-- Added fallback seat calculation when `ClassPromotions` records are missing or promotion matching fails.
-- When `ClassPromotions`-based seats return zero, the system now checks `SimulationAdjustmentCourse` and `AdjustmentCourse` overrides before excluding the course.
-- Logs a warning via Symfony logger when falling back to override-based seats (includes class_id, course_id, override source).
-- Moved `simulationAdjustmentsMap` and `adjustmentConfigsMap` loading before the class filtering loop to support fallback checks.
-- Passes `relaxPromotionFilter => true` to `CampaignCourseService::buildAvailableCourse()`.
+### 1. `AdminBiddingRoundCourseDto.php` — Add `is_shared` Boolean
+- Added `is_shared` boolean property with `#[OA\Property]` annotation (defaults to `false`).
+- Indicates whether the course is shared/split across multiple programme-promotions.
+- Used by the admin frontend to decide seat column format: `XX` vs `XX (XX)`.
 
-### 2. `CampaignCourseService.php` — Relax Promotion Filter
-- Added `relaxPromotionFilter` option to `buildAvailableCourse()`.
-- When `true`, the LEFT JOIN on classes skips the `ClassPromotions` non-zero seats subquery, and the course-level promotion-matching WHERE clause is bypassed.
-- All existing callers are unaffected (default is `false`). Only `AddDropAvailableCourseService` passes `true`.
+### 2. `AdminCampaignDetailService.php` — Compute `is_shared` from ClassPromotions
+- In `buildBiddingRoundDetail()`, compute `is_shared` for each course by counting distinct promotion IDs from the class's `ClassPromotions` collection.
+- `is_shared = true` when `count(distinct promotion IDs) > 1`.
+- Set `$courseDto->is_shared = $isShared` on each `AdminBiddingRoundCourseDto`.
 
-### 3. `BidRepository.php` — Add Pessimistic Locking Query
-- Added `countEnrolledWithLock(Classes $class, Campaign $campaign): int` method.
-- Uses `LockMode::PESSIMISTIC_WRITE` (`SELECT ... FOR UPDATE`) when counting enrolled bids for a class.
-- Lock is scoped to the class's bid rows and held only for the duration of the enrollment transaction.
+### 3. Unit Tests — `AdminBiddingRoundCourseDtoIsSharedTest.php`
+- New PHPUnit test file at `tests/Unit/Domain/Dashboard/Campaign/`.
+- Verifies: (a) `is_shared` defaults to `false`, (b) `is_shared = false` for single promotion, (c) `is_shared = true` for multiple promotions, (d) `is_shared = false` for duplicate entries of the same promotion, (e) `total_seats` and `total_all_seats` computed correctly.
 
-### 4. `AddDropService.php` — Wrap Enrollment in Transaction
-- Wrapped the enrollment processing loop in an explicit `beginTransaction()` / `commit()` / `rollBack()` block.
-- Replaced `countByClassAndStatusesAndCampaign()` with `countEnrolledWithLock()` for the seat availability check during enrollment.
-- Ensures that two concurrent enrollment requests for the same last seat will serialize: exactly one gets ENROLLED, the other gets WAITLISTED.
+### 4. Unit Tests — `AddDropValidatorSeatAvailabilityTest.php`
+- New PHPUnit test file at `tests/Unit/Domain/Campaign/ActiveCampaign/Validator/`.
+- Verifies: (a) enrollment passes when seats are available, (b) enrollment rejected with clear "is full" error when seats exhausted, (c) classes with no seat configuration are rejected, (d) over-capacity classes are rejected.
 
-### 5. `AddDropAvailableCourseController.php` — Add Sort/Filter Parameters
-- Added `availability` query parameter (`available` | `all`, default `all`). When `available`, only courses with `available_seats > 0` are returned.
-- Added `sort_by` query parameter (`available_seats_desc` | `course_name_asc`). `available_seats_desc` sorts by available seats descending with ties broken by course name ascending.
-- Updated OpenAPI annotations to document new parameters.
-- The existing `waitlist` boolean now also respects the `available_seats > 0` check (consistent behavior).
-
-### 6. `AddDropAvailableCourseDto.php` — No Changes Needed
-- The DTO already contains `available_seats`, `total_seats`, and `enrollment_count` fields with OpenAPI annotations. No modifications required.
+### 5. Backend Enrollment Validation — Verified (No Changes)
+- `AddDropService::executeCampaignAddDrop()` already uses pessimistic locking (`countEnrolledWithLock`) and auto-assigns WAITLISTED status when a course is full.
+- `AddDropValidator::validateClassAvailability()` returns clear "is full" error messages.
+- Concurrent enrollment protection is in place via `SELECT ... FOR UPDATE`.
 
 ## Impact
-- **No Database Migrations**: All changes are in query logic, locking strategy, and API parameters.
-- **No Breaking API Changes**: Only additive query parameters (`availability`, `sort_by`). Default behavior is unchanged.
-- **Backward Compatible**: Existing callers of `buildAvailableCourse()` unaffected by `relaxPromotionFilter` (defaults to `false`).
-- **Lock Scope**: Pessimistic lock held < 100ms per class, scoped to single class bid rows. Negligible contention at INSEAD scale.
+- **No Database Migrations**: Only DTO and service logic changes.
+- **No Breaking API Changes**: `is_shared` is an additive field. Existing consumers unaffected.
+- **Backward Compatible**: If admin frontend is not deployed simultaneously, old behavior continues until frontend is updated.
 
 ## Verification Steps
-1. Test available courses endpoint with `availability=available` — verify only courses with seats are returned.
-2. Test `sort_by=available_seats_desc` — verify correct sort order.
-3. Test with missing `ClassPromotions` records — verify courses with `SimulationAdjustmentCourse`/`AdjustmentCourse` overrides still appear.
-4. Open two browser sessions, both viewing a course with 1 seat. Submit enrollment simultaneously — verify exactly one gets ENROLLED and the other gets WAITLISTED.
-5. Run existing PHPUnit test suite (`bin/phpunit`) — verify no regressions.
+1. View PM dashboard bidding round detail — verify non-shared courses show only `XX` in the seat column.
+2. Verify shared courses (split across promotions) show `XX (XX)` format.
+3. Run PHPUnit test suite (`bin/phpunit`) — verify no regressions and new tests pass.

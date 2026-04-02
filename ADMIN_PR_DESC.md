@@ -1,18 +1,25 @@
-# Campaign Dashboard — Add Scroll Bar for Campaign Card
+# PM Dashboard — Fix Seat Column Split Format
 
 ## Problem
-The campaign card in the Admin Dashboard renders all bidding rounds and phases in a horizontal flex row. When a campaign has many rounds (e.g. 7+ Elective_recovery rounds), the content overflows the card boundary with no scroll mechanism, making right-side phases inaccessible.
+Jira: [DPBFAD-726](https://insead.atlassian.net/browse/DPBFAD-726)
 
-## Goal
-Add horizontal scrolling to the campaign modules row so that all bidding rounds and their phases are accessible regardless of how many rounds a campaign has.
+The "Seat Available" column in the PM's bidding round course table displays the split format `XX (XX)` whenever `total_all_seats !== total_seats`. This is incorrect — the split format should only appear when a course is genuinely shared/split across multiple programme-promotions, not merely when the values differ (e.g., due to an `AdjustmentCourse` seat override on a non-shared course).
 
-## Changes Made
+## Changes
 
-1. **`src/components/campaign/box-campaign.tsx`**
-   - Added `overflow-x-auto pb-2` to the campaign modules container div, enabling horizontal scroll when content exceeds the card width. The `pb-2` provides spacing so the scrollbar doesn't overlap phase labels.
+### 1. `src/components/dashboard/process/bidding-round/course-table-bidding-round.tsx` — Fix Seat Column Condition
+- Replaced the condition `row.total_all_seats && row.total_all_seats !== row.total_seats` with `row.is_shared`.
+- When `is_shared` is `true`: displays `{total_seats} ({total_all_seats})` — e.g., `18 (48)`.
+- When `is_shared` is `false` or undefined: displays only `{total_seats}` — e.g., `40`.
 
-## Testing / Verification Steps
-1. Open the Admin Dashboard with a campaign that has 7+ bidding rounds — confirm a horizontal scrollbar appears on the phases row and all rounds are reachable by scrolling.
-2. Confirm that campaigns with few bidding rounds show no scrollbar and the layout is unchanged.
-3. Confirm clicking a phase still navigates to the detail-bidding page correctly.
-4. Confirm the card header, stats boxes, dates, and overall page layout are unaffected.
+### 2. `src/src/campaign-management/campaign.types.ts` — Add `is_shared` to Type
+- Added `is_shared?: boolean` field to the `CourseListBidding` type to match the new API response field.
+
+## Depends On
+- **bidding-api PR**: Adds the `is_shared` boolean to the bidding round course detail API response. This admin PR should be deployed together with (or after) the API PR. If deployed before, the old behavior continues (no `is_shared` field means the split format is never shown).
+
+## Verification Steps
+1. Open PM dashboard → Bidding Round detail for an active campaign.
+2. Verify non-shared courses show only `XX` in the seat column.
+3. Verify shared courses (split across multiple promotions) show `XX (XX)` format.
+4. Verify courses with adjusted seats but only one promotion do **not** show the split format.

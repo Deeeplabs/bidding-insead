@@ -1,19 +1,20 @@
 ## Why
 
-During the Add/Drop phase, courses with available seats are not reliably surfaced to students for direct enrollment. The `AddDropAvailableCourseService` applies multiple filters (class status, promotion matching, ClassPromotions existence, seat capacity checks) that can silently exclude courses even when seats remain. Additionally, there is no concurrency protection on seat allocation, risking over-enrollment when multiple students enroll simultaneously. Students cannot easily discover which sections have open seats, and the UI does not provide a clear path to directly enroll in available courses without going through the full bidding/add-drop form workflow.
+During both the Bidding Round and Add/Drop phases, seat availability is currently displayed dynamically to students — showing remaining seats (`available_seats/total_seats`) that change in real-time as other students enroll. This creates confusion, anxiety, and an inconsistent experience. The PM's dashboard also incorrectly shows the seat format: it currently displays `XX (XX)` for all courses with `total_all_seats`, but the `XX (XX)` format should only appear when a course is shared/split across multiple programme-promotions.
+
+The PM requires that seat capacity be configured upfront and remain **static** in the UI. Students should only see the total number of seats offered — never remaining seats or consumption data. The system must still enforce real-time backend validation to prevent over-enrollment, but this should be invisible to the student until they attempt to enroll in a full course.
 
 ## What Changes
 
-- **Fix available course filtering**: Ensure `AddDropAvailableCourseService` and `CampaignCourseService` do not silently exclude courses that have available seats due to missing or mismatched `ClassPromotions` records, incorrect promotion matching, or stale campaign course filters.
-- **Add real-time seat availability display**: Surface accurate, live seat counts in the student portal's add/drop course list so students can immediately identify sections with open seats.
-- **Add concurrency protection for seat allocation**: Implement database-level locking (pessimistic or optimistic) in `AddDropService` to prevent race conditions where multiple students simultaneously claim the last seat, causing over-allocation.
-- **Enhance course discoverability**: Add filtering/sorting options in the student UI to allow students to easily find courses with available seats (e.g., sort by availability, filter to show only courses with open seats).
-- **Immediate seat count update**: Ensure seat counts decrement immediately after enrollment and the UI reflects the updated availability without requiring a page refresh.
+- **Make seat display static for students**: Replace the dynamic `available_seats/total_seats seats` chip in `CourseOptionContent.tsx` with a single static total-seats value. Students see only `XX seats` — never remaining or consumed seats.
+- **Fix PM dashboard seat format**: The "Seat Available" column in the PM's bidding round course table (`course-table-bidding-round.tsx`) currently shows `XX (XX)` whenever `total_all_seats !== total_seats`. This should only display the split format `XX (XX)` when the course is genuinely shared across multiple programme-promotions — not merely when the values differ.
+- **Enforce real-time backend enrollment validation**: Keep existing concurrency protection (`SELECT ... FOR UPDATE` in `AddDropService`) and seat capacity checks. When a course is full, return a clear error ("Course is full") and prevent enrollment. This validation is backend-only — the UI does not reflect real-time seat counts.
+- **Remove dynamic seat fields from student-facing UI**: Stop displaying `available_seats` and `enrolled_count` in student-facing components. The API may still return these fields (backward compatibility), but the UI must not render them.
 
 ## Capabilities
 
 ### New Capabilities
-- `add-drop-seat-availability`: Real-time seat availability display, course discoverability filters (sort/filter by available seats), and immediate seat count updates in the student add/drop UI.
+- `static-seat-display`: Static seat capacity display for both Bidding Round and Add/Drop phases, with `XX` format for non-shared courses and `XX (XX)` format only for courses shared across programme-promotions.
 
 ### Modified Capabilities
 _(No existing specs to modify — the openspec/specs/ directory is empty)_
@@ -21,20 +22,19 @@ _(No existing specs to modify — the openspec/specs/ directory is empty)_
 ## Impact
 
 **bidding-api:**
-- `Domain/Campaign/ActiveCampaign/AddDrop/AddDropAvailableCourseService.php` — Fix filtering logic that silently excludes available courses (promotion matching, ClassPromotions checks, seat capacity threshold).
-- `Domain/Campaign/ActiveCampaign/CampaignCourseService.php` — Review and fix campaign course filter application that may incorrectly hide classes.
-- `Domain/Campaign/ActiveCampaign/AddDropService.php` — Add database-level locking around seat allocation to prevent race conditions on concurrent enrollments.
-- `Repository/BidRepository.php` — May need locking queries (SELECT ... FOR UPDATE) for seat counting during enrollment.
-- `Dto/Response/` — Add/update response DTOs to include real-time seat availability fields (available_seats, total_seats, enrolled_count) in available course responses.
-- `Controller/Api/Student/Campaign/AddDrop/AddDropAvailableCourseController.php` — Add sort/filter parameters for seat availability.
+- `Domain/Dashboard/Campaign/AdminCampaignDetailService.php` — Ensure `total_seats` and `total_all_seats` are set correctly so the PM dashboard can determine when to show split format. May need to add a flag or use class promotion count to determine if course is shared across programme-promotions.
+- `Domain/Dashboard/Campaign/AdminBiddingRoundCourseDto.php` — May add an `is_shared_across_promotions` boolean field to explicitly signal when split format applies.
+- `Domain/Campaign/ActiveCampaign/AddDropService.php` — Verify existing concurrency protection returns clear "Course is full" error message when seats are exhausted.
+
+**bidding-admin:**
+- `components/dashboard/process/bidding-round/course-table-bidding-round.tsx` — Fix the seat display condition: show `XX (XX)` only when the course is shared across multiple programme-promotions, not just when `total_all_seats !== total_seats`.
 
 **bidding-web:**
-- `features/bidding/components/bid-submission/CourseSelector.tsx` — Display seat availability per section, highlight courses with open seats.
-- `features/bidding/hooks/use-add-drop-waitlist-form.tsx` — Handle immediate UI updates after enrollment.
-- `lib/api/queries/campaign.queries.ts` — Add filter/sort parameters to available courses query.
-- `lib/api/services/campaign.service.ts` — Update API service to pass new filter parameters.
+- `features/bidding/components/bid-submission/CourseOptionContent.tsx` — Remove the dynamic `available_seats/total_seats seats` chip. Replace with a static `XX seats` chip showing only `total_seats`.
+- `features/bidding/types/bidding.type.ts` — No type changes needed (fields remain for backward compatibility), but UI components must stop using `available_seats` and `enrolled_count`.
+- `features/bidding/hooks/use-course-options.ts` — No changes needed; the `isFull` check via `STATUS_CLASS.FULL` already handles disabling full courses.
 
-**No migration required** — No new database columns or tables needed; changes are to query logic, locking strategy, and UI display.
+**No migration required** — No new database columns or tables needed; changes are to display logic only.
 **No webhook contract changes** — MuleSoft endpoints unaffected.
-**No breaking API changes** — Only additive fields in response DTOs.
-**No simulation logic changes** — Seat allocation logic is preserved; only the concurrency guard is added.
+**No breaking API changes** — Existing API response fields remain; only UI rendering changes.
+**No simulation logic changes** — Backend enrollment validation is preserved as-is.

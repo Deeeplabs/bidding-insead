@@ -1,39 +1,31 @@
-# Fix: Add/Drop Seat Availability Display & Course Discoverability
+# Static Seat Display for Students
 
 ## Problem
 Jira: [DPBFAD-726](https://insead.atlassian.net/browse/DPBFAD-726)
 
-During the Add/Drop phase, students could not easily identify which course sections had open seats. The course selector dropdown showed courses without any seat availability information, and after enrolling in a course, the available courses list showed stale seat counts until the student navigated away and back.
+During both the Bidding Round and Add/Drop phases, the course selector displays a dynamic seat chip showing `{available_seats}/{total_seats} seats` with green/red coloring based on availability. This reveals real-time seat consumption to students, causing confusion and anxiety. The PM requires that seat capacity be displayed as a **static** total — students should only see how many seats the course offers, never remaining seats or enrollment counts.
 
 ## Changes
 
-### 1. `CourseOptionContent.tsx` — Display Seat Availability Per Section
-- Added a seat availability chip next to each course option in the add/drop course selector dropdown.
-- Shows `{available_seats}/{total_seats} seats` for each section.
-- Sections with available seats display a green-bordered chip; full sections display a red-bordered chip.
-- Chip renders conditionally only when `available_seats` and `total_seats` are present in the course data.
+### 1. `CourseOptionContent.tsx` — Replace Dynamic Seat Chip with Static Display
+- Changed the seat chip from `{data.available_seats}/{data.total_seats} seats` to `{data.total_seats} seats`.
+- Removed conditional green/red coloring based on `data.available_seats > 0`.
+- Applied a single neutral chip style: `!border !bg-white !text-gray-700 !border-gray-300`.
+- The chip now renders when `data.total_seats` is defined (no longer requires `available_seats`).
+- This single change applies to both Bidding Round and Add/Drop since both phases use the same `CourseOptionContent` component via `CourseSelector.tsx`.
 
-### 2. `campaign.mutations.ts` — Invalidate Cache After Enrollment
-- After a successful add/drop submission, the `useSubmitAddDrop` mutation now also invalidates:
-  - `campaignKeys.addDrop()` — forces the available courses list to refetch with updated seat counts.
-  - `campaignKeys.enrollments()` — forces the student's enrollment list to refresh.
-- Previously only `detail` and `lists` were invalidated. The available courses query was stale until manual refresh.
-
-### 3. `add-drop.type.ts` — No Changes Needed
-- The `AvailableCourseResponse` type already includes `available_seats`, `total_seats`, and `enrollment_count` fields. No modifications required.
-
-### 4. `campaign.service.ts` / `campaign.queries.ts` — No Changes Needed
-- The `getAddDropAvailableCourses` service method already accepts arbitrary query parameters via `Record<string, string>`. The new backend `availability` and `sort_by` parameters can be passed directly by callers without service changes.
-- Query keys already include params for proper cache keying.
+### 2. Verification — No Other Student-Facing Components Render Dynamic Seats
+- Confirmed that `available_seats` and `enrolled_count` exist only in type definitions (`bidding.type.ts`, `add-drop.type.ts`, etc.) and data mapping (`AddDropPage.tsx`) — but **no UI component renders them** to the student.
+- The API still returns these fields for backward compatibility; only the UI rendering was changed.
 
 ## Impact
-- **Immediate Seat Visibility**: Students can see at a glance which sections have open seats before selecting.
-- **Fresh Data After Enrollment**: Seat counts and enrollment lists update automatically after submission — no manual refresh needed.
-- **No Breaking Changes**: All changes are additive. Existing behavior is preserved when new parameters are not used.
+- **Static Seat Display**: Students see only `XX seats` (total configured capacity) — no remaining/available counts, no green/red coloring.
+- **Consistent Across Phases**: Applies to both Bidding Round and Add/Drop course selectors.
+- **No Breaking Changes**: API response fields unchanged. Only the UI rendering was updated.
+- **Backend Enforcement Preserved**: Real-time seat validation continues server-side. Students attempting to enroll in a full course receive a clear error at submission time.
 
 ## Verification Steps
-1. Navigate to add/drop page during an active campaign.
-2. Open the course selector dropdown — verify each course section shows a seat availability chip (e.g., "3/30 seats").
-3. Verify full sections show a red chip ("0/30 seats") and available sections show a green chip.
-4. Enroll in a course — verify the course list refreshes automatically and the seat count decrements without manual page refresh.
-5. Verify the enrollment list updates immediately to include the newly enrolled course.
+1. During an active Bidding Round, open the course selector — verify each course shows only `XX seats` with neutral styling.
+2. During an active Add/Drop, open the course selector — verify the same static display.
+3. Attempt to enroll in a full course — verify a clear error appears (WAITLISTED status or "Course is full").
+4. Confirm no course option shows remaining seat counts, enrolled counts, or availability-based coloring.
