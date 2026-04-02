@@ -23,6 +23,7 @@
 - **Changes:**
   - Fixed `findSubmittedCourseIdsInParallelRoundsByStudentAndProgram()` — replaced undefined `BidStatus::SUBMITTED` with `BidStatus::SELECTED` and incorrect DQL field `b.moduleId` with `b.campaignModule`. Note: This query is retained for Add/Drop phase duplicate checking only — it is no longer called during Bidding phase submission.
   - Added `findDuplicateEnrolledCoursesByStudentAndCampaign()` to query same-campaign duplicate entries with optional `$moduleId` scoping. **Waitlist Fix**: Removed module scoping for waitlist status, making it campaign-wide to ensure cross-module waitlist duplicates are detected.
+  - **Critical Bug Fix — `$moduleId` not used in query**: The `findDuplicateEnrolledCoursesByStudentAndCampaign()` method accepts `?int $moduleId` but the DBAL query never applies it. When `$moduleId` is provided, the query MUST add `->andWhere('b.campaign_module_id = :moduleId')->setParameter('moduleId', $moduleId)` so that duplicate detection is scoped to the current module only. Without this, students who have the same course enrolled in two parallel bidding rounds (expected after simulation) are permanently blocked from submitting any add/drop request — the validator demands they drop one, but the UI only shows courses from the current module.
   - **`findEnrolledOrWaitlistedCourseIdsByStudentAndCampaign`**: Broadened to always return campaign-wide waitlists, even if a `$moduleId` is provided. This ensures the UI and backend correctly identify courses waitlisted in other phases as duplicates.
 
 ### `AddDropValidator`

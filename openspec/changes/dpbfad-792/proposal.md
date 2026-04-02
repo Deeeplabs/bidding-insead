@@ -25,6 +25,13 @@ In the Add/Drop & Waitlist phase, courses that students are already enrolled in 
 - `BidRepository::findEnrolledOrWaitlistedCourseIdsByStudentAndCampaign` incorrectly filtered waitlisted courses by the current module, hiding cross-module waitlist duplicates.
 - `AddDropService` skipped duplicate/capital validation entirely if only waitlist items were submitted.
 
+### 10. `findDuplicateEnrolledCoursesByStudentAndCampaign()` Ignores `$moduleId` — Cross-Module Deadlock
+The `findDuplicateEnrolledCoursesByStudentAndCampaign()` method in `BidRepository` accepts a `?int $moduleId` parameter but **never uses it** in the query. The SQL always queries ALL enrolled/selected bids across ALL modules in the campaign. After parallel bidding + simulation commit, a student legitimately has the same course ENROLLED in both bidding1 and bidding2. When the student opens add/drop for bidding1 and tries to submit, `validateNoUnresolvedDuplicateEnrollments()` detects the cross-module enrollment as a "duplicate" and throws: "You are enrolled in this course from multiple bidding rounds. Please drop one enrollment before submitting." However, the student can only manage courses in the current module's add/drop UI — they cannot see or drop the enrollment from the other module. This creates an **unresolvable deadlock**: the student is permanently blocked from submitting any add/drop request.
+
+**Symptoms observed:**
+- Student can't submit add/drop due to "duplicate course" error, but the mentioned course is missing from the add/drop list (it's enrolled in a different module)
+- Student 'Jose Moreno' gets error "You are enrolled in this course from multiple bidding rounds" on bidding1 despite only operating in bidding1
+
 ### 9. Bidding Dropdown Incorrectly Marks Courses as "Previously Enrolled" Across Parallel Rounds
 In the Bidding phase, the `getAvailableCourses()` endpoint in `StudentActiveCampaignController` computes two course-ID lists: `$previouslyEnrolledCourseIds` (excludes the current campaign) and `$allEnrolledCourseIds` (includes ALL campaigns, no exclusion). The `is_enrolled` flag on each `AvailableCourseDto` is set from the second, unfiltered list. Because courses bid on in Bidding Round 1 (module 5856) have `SELECTED` status in the same campaign (987), they appear in `$allEnrolledCourseIds` when the student opens Bidding Round 2 (module 5860). The frontend's `getUnavailableReason()` then treats `is_enrolled = true` as "Previously Enrolled", disabling those courses in the dropdown — even though they are in the current campaign and should be freely selectable across parallel rounds.
 
@@ -43,6 +50,7 @@ In the Bidding phase, the `getAvailableCourses()` endpoint in `StudentActiveCamp
 11. **Fix bidding dropdown `is_enrolled` flag**: In `StudentActiveCampaignController::getAvailableCourses()`, pass `$campaign` as the exclusion parameter to the `$allEnrolledCourseIds` query so that courses from the current campaign (including parallel bidding modules) are not flagged as `is_enrolled`. This aligns the `is_enrolled` flag with `$previouslyEnrolledCourseIds`, ensuring only courses from prior campaigns are marked as "Previously Enrolled" in the bidding dropdown.
 12. **Add regression tests**: Cover duplicate course resolution, capital validation, null `studentData` behaviors, and the new relaxed backup logic.
 13. **Waitlist Duplicate Prevention**: Update `AddDropValidator` to include the `$waitlist` array in all duplicate and previous enrollment checks. Update `BidRepository` to return campaign-wide waitlists, ensuring the UI and backend correctly block courses already waitlisted in other modules.
+14. **Fix `findDuplicateEnrolledCoursesByStudentAndCampaign` module scoping**: Add a `WHERE b.active_module_id = :moduleId` clause when `$moduleId` is provided. This ensures duplicate detection is scoped to the current module, preventing cross-module deadlocks where a student is blocked by enrollments from other bidding rounds they cannot manage.
 
 ## Capabilities
 

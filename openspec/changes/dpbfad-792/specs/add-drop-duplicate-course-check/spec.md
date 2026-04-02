@@ -9,10 +9,17 @@ When a student has the same course ENROLLED or SELECTED from multiple bidding ro
 - Add/Drop in bid2 only checks for duplicates within bid2's module
 - A student can have duplicate enrollments in bid1 AND bid2 simultaneously without conflict
 
-#### Scenario: Student has same course enrolled from bid round 1 and bid round 2, submits add/drop without dropping one
-- **GIVEN** student "John Doe" has an ENROLLED bid for class 1501 (course "Finance 101", section EA) from bid round 1 in campaign 10
-- **AND** student "John Doe" has an ENROLLED bid for class 1502 (course "Finance 101", section EB) from bid round 2 in campaign 10
-- **WHEN** the student submits an Add/Drop request for campaign 10 with enrollment for class 1601 (course "Marketing 201") and no drops
+#### Scenario: Student has same course enrolled from bid round 1 and bid round 2, submits add/drop for bid round 1
+- **GIVEN** student "John Doe" has an ENROLLED bid for class 1501 (course "Finance 101", section EA) from bid round 1 (moduleId=1) in campaign 10
+- **AND** student "John Doe" has an ENROLLED bid for class 1502 (course "Finance 101", section EB) from bid round 2 (moduleId=2) in campaign 10
+- **WHEN** the student submits an Add/Drop request for bid round 1 (moduleId=1) of campaign 10 with enrollment for class 1601 (course "Marketing 201") and no drops
+- **THEN** the system accepts the submission (duplicate detection is scoped to moduleId=1 only; the enrollment in moduleId=2 is independent)
+- **AND** no error about cross-module duplicates is thrown
+
+#### Scenario: Student has TWO enrollments for same course within SAME module, submits add/drop without dropping one
+- **GIVEN** student "John Doe" has an ENROLLED bid for class 1501 (course "Finance 101", section EA) from bid round 1 (moduleId=1) in campaign 10
+- **AND** student "John Doe" has an ENROLLED bid for class 1502 (course "Finance 101", section EB) ALSO from bid round 1 (moduleId=1) in campaign 10 (edge case — two enrolled sections of same course within same module)
+- **WHEN** the student submits an Add/Drop request for bid round 1 (moduleId=1) of campaign 10 with enrollment for class 1601 (course "Marketing 201") and no drops
 - **THEN** the system rejects the request with a `\DomainException`
 - **AND** the error message is: "Duplicate enrollment detected for course Finance 101. You are enrolled in this course from multiple bidding rounds. Please drop one enrollment before submitting."
 - **AND** no bids are created or modified
@@ -24,41 +31,34 @@ When a student has the same course ENROLLED or SELECTED from multiple bidding ro
 - **THEN** the system checks for duplicates only within module 2
 - **AND** since bid round 2 has no duplicates, the submission is allowed to proceed (duplicates in bid round 1 are independent)
 
-#### Scenario: Student has same course enrolled from two rounds, drops one to resolve
-- **GIVEN** student "John Doe" has an ENROLLED bid for class 1501 (course "Finance 101", section EA) from bid round 1 in campaign 10
-- **AND** student "John Doe" has an ENROLLED bid for class 1502 (course "Finance 101", section EB) from bid round 2 in campaign 10
-- **WHEN** the student submits an Add/Drop request for campaign 10 with:
+#### Scenario: Student has same course enrolled from two different rounds, each module operates independently
+- **GIVEN** student "John Doe" has an ENROLLED bid for class 1501 (course "Finance 101", section EA) from bid round 1 (moduleId=1) in campaign 10
+- **AND** student "John Doe" has an ENROLLED bid for class 1502 (course "Finance 101", section EB) from bid round 2 (moduleId=2) in campaign 10
+- **WHEN** the student submits an Add/Drop request for bid round 1 (moduleId=1) with:
+  - DROP: class 1501 (course "Finance 101", section EA)
+- **THEN** the system accepts the submission (operating within moduleId=1 only)
+- **AND** the bid for class 1501 is marked as DROPPED
+- **AND** the bid for class 1502 in moduleId=2 is NOT affected
+
+#### Scenario: Student has TWO enrollments for same course within SAME module, drops one to resolve
+- **GIVEN** student "John Doe" has an ENROLLED bid for class 1501 (course "Finance 101", section EA) in moduleId=1 in campaign 10
+- **AND** student "John Doe" has an ENROLLED bid for class 1502 (course "Finance 101", section EB) ALSO in moduleId=1 in campaign 10
+- **WHEN** the student submits an Add/Drop request for moduleId=1 with:
   - DROP: class 1502 (course "Finance 101", section EB)
-- **THEN** the system accepts the submission (duplicate resolved by dropping one)
+- **THEN** the system accepts the submission (within-module duplicate resolved by dropping one)
 - **AND** the bid for class 1502 is marked as DROPPED
 
-#### Scenario: Student has same course enrolled from two rounds, drops one and adds another course
-- **GIVEN** student "John Doe" has an ENROLLED bid for class 1501 (course "Finance 101", section EA) from bid round 1 in campaign 10
-- **AND** student "John Doe" has an ENROLLED bid for class 1502 (course "Finance 101", section EB) from bid round 2 in campaign 10
-- **WHEN** the student submits an Add/Drop request for campaign 10 with:
-  - DROP: class 1501 (course "Finance 101", section EA)
-  - ADD: class 1601 (course "Marketing 201")
-- **THEN** the system accepts the submission (duplicate resolved by drop)
-- **AND** the bid for class 1501 is marked as DROPPED
-- **AND** a new ENROLLED bid is created for class 1601
+#### Scenario: No duplicate enrollments within module, add/drop proceeds normally
+- **GIVEN** student "John Doe" has an ENROLLED bid for class 1501 (course "Finance 101") from bid round 1 (moduleId=1) in campaign 10
+- **AND** student "John Doe" has an ENROLLED bid for class 1601 (course "Marketing 201") from bid round 2 (moduleId=2) in campaign 10
+- **WHEN** the student submits an Add/Drop request for moduleId=1 of campaign 10
+- **THEN** the system accepts the submission (no duplicate courses within moduleId=1)
 
-#### Scenario: Student has multiple duplicate courses from parallel bidding, must resolve all
-- **GIVEN** student "John Doe" has ENROLLED bids for course "Finance 101" from bid round 1 AND bid round 2
-- **AND** student "John Doe" has ENROLLED bids for course "Strategy 301" from bid round 1 AND bid round 2
-- **WHEN** the student submits an Add/Drop request dropping only one Finance 101 enrollment (but not resolving Strategy 301)
-- **THEN** the system rejects the request with a `\DomainException` mentioning "Strategy 301"
-- **AND** no bids are created or modified
-
-#### Scenario: No duplicate enrollments exist, add/drop proceeds normally
-- **GIVEN** student "John Doe" has an ENROLLED bid for class 1501 (course "Finance 101") from bid round 1 in campaign 10
-- **AND** student "John Doe" has an ENROLLED bid for class 1601 (course "Marketing 201") from bid round 2 in campaign 10
-- **WHEN** the student submits an Add/Drop request for campaign 10
-- **THEN** the system accepts the submission (no duplicate courses, different courses in each round)
-
-#### Scenario: Drop-only submission also enforces duplicate resolution
-- **GIVEN** student "John Doe" has an ENROLLED bid for course "Finance 101" from bid round 1 AND bid round 2
-- **WHEN** the student submits a drop-only Add/Drop request that does NOT drop any Finance 101 enrollment
-- **THEN** the system rejects the request because unresolved duplicates exist
+#### Scenario: Cross-module same-course enrollments are independent, not duplicates
+- **GIVEN** student "John Doe" has an ENROLLED bid for course "Finance 101" section EA in bid round 1 (moduleId=1)
+- **AND** student "John Doe" has an ENROLLED bid for course "Finance 101" section EB in bid round 2 (moduleId=2)
+- **WHEN** the student submits a drop-only Add/Drop request for moduleId=1 that does NOT drop Finance 101
+- **THEN** the system accepts the submission (cross-module enrollments are not considered duplicates; only within-module duplicates trigger rejection)
 
 ### Requirement: Prevent adding a course in Add/Drop 2 that was already added in Add/Drop 1
 

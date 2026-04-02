@@ -12,7 +12,7 @@
 - [x] 2.3 Call `validateNoUnresolvedDuplicateEnrollments()` in `AddDropService::submitAddDrop()` immediately after student eligibility check (Step 4a). Pass `$moduleId` to scope validation to current bidding round.
 - [x] 2.4 Enable `validateBidPoints()` in `AddDropService::submitAddDrop()` (Step 8a) and remove the comment stating it is not enforced.
 - [x] 2.5 Update `AddDropService.php` and `AddDropValidator.php` to pass `$moduleId` to limit finding dropped bids and refunded bid points exclusively to that specific module.
-- [x] 2.6 **Critical Fix**: Ensure `validateNoUnresolvedDuplicateEnrollments()` receives `$moduleId` so that Add/Drop in bid2 does NOT see duplicates from bid1. The validation is now properly scoped per module.
+- [x] 2.6 **Critical Fix — `$moduleId` NOT USED in query**: `findDuplicateEnrolledCoursesByStudentAndCampaign()` in `BidRepository.php` (line 2726) accepts `?int $moduleId` but the DBAL query NEVER applies it. When `$moduleId` is provided, add `->andWhere('b.campaign_module_id = :moduleId')->setParameter('moduleId', $moduleId)` to the query builder. Without this fix, students who have the same course enrolled in two parallel bidding rounds (expected after simulation) are permanently blocked from submitting any add/drop — the validator demands they drop one, but the UI only shows courses from the current module. **This is the root cause of both reported issues.**
 - [x] 2.7 **Cross-Phase Duplicate Fix**: Update `validateNoDuplicateCoursesWithCurrentEnrollment()` signature to accept `?int $moduleId = null`. When `$moduleId` is provided, build `$droppedCourseIds` by querying the database for each dropped class — only include the course in the exclusion map if the student has an ENROLLED or SELECTED bid for that class in the **current module** (`campaignModule = $moduleId`). If no matching bid exists in the current module, the course is NOT excluded from the campaign-wide duplicate check.
 - [x] 2.8 **Pass moduleId at call site**: In `AddDropService::submitAddDrop()` Step 5c, pass `$moduleId` to `validateNoDuplicateCoursesWithCurrentEnrollment($enrollments, $drops, $student, $campaign, $moduleId)` so the module-scoped drop exclusion logic activates.
 
@@ -67,10 +67,20 @@
 - [ ] 9.2 Manually verify: student submits bids for 'Art of Why' and 'Blue Ocean Strategy' in BIDDING1 (moduleId=5856), then opens BIDDING2 (moduleId=5860) → those courses are NOT shown as "Previously Enrolled" in the dropdown and can be freely selected.
 - [ ] 9.3 Manually verify: courses genuinely enrolled from a PRIOR campaign still show as "Previously Enrolled" in both BIDDING1 and BIDDING2 dropdowns.
 
+## 10. Fix Cross-Module Deadlock — `findDuplicateEnrolledCoursesByStudentAndCampaign` Module Scoping
+
+- [x] 10.1 **Code Fix**: In `BidRepository::findDuplicateEnrolledCoursesByStudentAndCampaign()` (line 2726-2755), add module scoping: when `$moduleId` is not null, append `->andWhere('b.campaign_module_id = :moduleId')->setParameter('moduleId', $moduleId)` to the DBAL query builder. This ensures duplicate detection only considers bids within the current module.
+- [x] 10.2 **Unit Test**: Add test case for `findDuplicateEnrolledCoursesByStudentAndCampaign()` confirming that when `$moduleId` is provided, only bids from that module are counted. A student with Course X enrolled in moduleId=1 AND moduleId=2 should return 0 duplicates when queried with moduleId=1 (one enrollment per module is not a duplicate).
+- [x] 10.3 **Unit Test**: Add test case confirming that when `$moduleId` is null, the query detects campaign-wide duplicates (backward-compatible behavior).
+- [x] 10.4 **Integration Test**: Student has same course enrolled from bidding1 (moduleId=1) and bidding2 (moduleId=2). Submit add/drop for moduleId=1 → should succeed without "duplicate enrollment" error.
+- [x] 10.5 **Integration Test**: Student has TWO enrollments for the same course within the SAME module (edge case). Submit add/drop for that module without dropping one → should fail with duplicate error.
+- [ ] 10.6 **Manual Verify**: Follow the exact reproduction steps: (1) Create campaign, open bidding. (2) Bid from 3 students in parallel rounds. (3) Close bidding. (4) Open/commit/close simulation. (5) Open add/drop. (6) Impersonate student. (7) Submit add/drop → should succeed without "multiple bidding rounds" error.
+- [ ] 10.7 **Manual Verify**: Confirm that a course enrolled in a different module does NOT appear as a blocking "duplicate" when submitting add/drop for the current module.
+
 ## 8. Original Verification
 
 - [x] 8.1 Run PHPUnit tests covering `AddDropServiceNullSafetyTest.php` and `AddDropValidatorPreviousEnrollmentTest.php`.
-- [x] 8.2 Manually verify parallel bidding duplicate forces drop in Add/Drop.
+- [ ] 8.2 Manually verify parallel bidding duplicate behavior in Add/Drop. After fix 10.1, cross-module enrollments of the same course should NOT block add/drop submission. Only within-module duplicates should require resolution.
 - [x] 8.3 Manually verify Add/Drop 1 course blocked in Add/Drop 2. (**REGRESSION** — fixed via tasks 2.7 & 2.8; `validateNoDuplicateCoursesWithCurrentEnrollment` now module-scoped; cross-module drop bypass closed)
 - [x] 8.4 Manually verify negative capital submission is blocked.
 - [x] 8.5 Manually verify dropping courses exclusively targets the submitted bidding round.
