@@ -1,56 +1,67 @@
-# Fix: UTC Timezone Standardization - Backend Implementation (Phase 2)
+# Fix: Seat Capacity Resets to Default After Student Bid Submission
 
 ## Problem
-Jira: [DPBFAD-919](https://insead.atlassian.net/browse/DPBFAD-919)
+Jira: [DPBFAD-976](https://insead.atlassian.net/browse/DPBFAD-976)
 
-Phase 1 fixed the student-facing timezone display by reinterpreting naive `DATETIME` strings as UTC. However, a persistent **+1 hour offset** remained because the server's default timezone (`Europe/Paris`) was still applied by PHP and Doctrine whenever `new \DateTime()` was used. This caused:
-- `CampaignPhaseService::activatePhase()` to overwrite `start_date`/`end_date` in JSON config with server-local time (`\DateTime::ATOM` format) instead of UTC.
-- `CampaignService` to bypass `DateHelper::parse()` when saving campaign dates, using `new \DateTime($data['start_date'])` which inherited the server timezone.
-- Inconsistent `new \DateTime()` usage across entities, mappers, and services producing Europe/Paris timestamps instead of UTC.
+When a PM configures seat capacity to **3** for courses via `AdjustmentCourse` records, the student-facing bidding round detail initially displays the correct value. However, after a student submits a bid, the seat capacity reverts to the default **90** (the sum of `ClassPromotions.promotionSeats`).
 
-### 3. Capital (Bid Points) Check Disabled
-`AddDropValidator::validateBidPoints()` had correct logic but was never called in `AddDropService::submitAddDrop()`. This loophole allowed submissions resulting in negative bid point balances.
+The PM dashboard continues to show "3" because `AdminCampaignDetailService` correctly reads from the `AdjustmentCourse` table. The student-facing code paths inconsistently apply this override.
 
-### 1. `Kernel.php` — Set Application Default Timezone to UTC
-- Added `date_default_timezone_set('UTC')` in `Kernel::boot()` so all `new \DateTime()` calls and Doctrine `DATETIME` reads default to UTC.
+**Root cause**: Multiple student-facing mappers, validators, and services read seat capacity directly from `$class->getTotalPromotionSeats()` instead of first checking the `AdjustmentCourse` table for PM-configured overrides. The pattern `$adjustment?->getSeatCapacity() ?? $class->getTotalPromotionSeats()` was correctly used in some code paths (e.g., `buildAddDropDetail()`, `getAvailableCourses()`) but missing in many others.
 
-### 2. `DateHelper.php` — Add `utcNow()` and Revise `toIso()`
-- Added `DateHelper::utcNow()` — returns `new \DateTime('now', new \DateTimeZone('UTC'))` for explicit UTC intent.
-- Revised `toIso()` to use `DateTime::createFromInterface()` + `setTimezone(UTC)` instead of naive string reinterpretation, now that the app timezone is UTC.
+## Changes
 
-### 3. `CampaignPhaseService.php` — Fix Activation Flow
-- Replaced all `new \DateTime()` with `DateHelper::utcNow()`.
-- Replaced all `new \DateTime($dateString)` with `DateHelper::parse($dateString)`.
-- Changed `$now->format(\DateTime::ATOM)` to `DateHelper::toIso($now)` for JSON config values (`actual_start_date`, `actual_end_date`, `start_date`, `end_date`, `expected_start_date`, `expected_end_date`).
+### 1. `CampaignToModuleDetailDtoMapper.php` — Primary Bug Fix
+- Loaded `$adjustmentConfigsMap` via `findByCampaignIndexedByClass()` at the top of `buildBiddingRoundDetail()` and `buildFinalEnrollmentDetail()`.
+- Replaced all bare `$class->getTotalPromotionSeats()` calls with the adjustment fallback pattern in both methods (enrolled, waitlisted, rejected sections).
 
-### 4. `CampaignService.php` — Fix Campaign Date Save
-- Replaced `new \DateTime($data['start_date'])` and `new \DateTime($data['end_date'])` with `DateHelper::parse()`.
-- Replaced all `new \DateTime()` (timestamps, status checks, query parameters) with `DateHelper::utcNow()`.
-- Replaced `new \DateTime($phasePrevious['end_date'])` with `DateHelper::parse()` for phase completion checks.
+### 2. `CampaignToActiveBiddingRoundDtoMapper.php` — List View Fix
+- Injected `AdjustmentCourseRepository` into the constructor.
+- Loaded `$adjustmentMap` in `buildBiddingRoundModuleData()` and `buildAddDropModuleData()`.
+- Replaced all 5 bare `getTotalPromotionSeats()` calls across submitted bids, available courses, enrolled, allocated, and waitlisted sections.
 
-### 5. `Campaign.php` Entity — Standardize `$now`
-- Replaced all `new \DateTime()` with `DateHelper::utcNow()` in `getCurrentActivePhaseDetails()`, `getCurrentActivePhaseDetailsByModule()`, `getAutoDetectedCurrentModuleSequence()`, `computeDynamicStatus()`, `getPhaseBiddingPrebidding()`, and the constructor.
+### 3. `BidValidator.php` — Validation Fix
+- Injected `AdjustmentCourseRepository` into the constructor.
+- Loaded adjustment map in `validateClassStatus()`.
+- Used adjusted seat capacity for the "has no available seats" check.
 
-### 6. `CampaignToActiveBiddingRoundDtoMapper.php` — Standardize Mapper
-- Replaced all `new \DateTime()` with `DateHelper::utcNow()` for deadline comparisons (`is_passed_deadline`), countdown calculations, and module active-state checks.
+### 4. `AddDropValidator.php` — Validation Fix
+- Injected `AdjustmentCourseRepository` into the constructor.
+- Added `loadAdjustmentMap(Campaign)` method with per-campaign caching.
+- Fixed 3 bare calls in `validateWaitlistCapacity()`, `validateClassAvailability()`, and `validateMaxWaitlistSlotsPerStudent()`.
 
-### 7. `CampaignToModuleDetailDtoMapper.php` — Standardize Mapper
-- Replaced all `new \DateTime()` with `DateHelper::utcNow()` for deadline comparisons, module status evaluation, `isPhaseActive()`, and countdown calculations.
+### 5. `AddDropService.php` — Wire Adjustment Map
+- Added `$this->validator->loadAdjustmentMap($campaign)` call before validator invocations in `submitAddDrop()`.
 
-### 8. `AdminCampaignDetailService.php` — Fix Admin Dashboard
-- Replaced all `new \DateTime()` with `DateHelper::utcNow()` for phase status computation, deadline query parameters, and class filtering.
-- Replaced `new \DateTime($activePhase['start_date'])` / `new \DateTime($activePhase['end_date'])` with `DateHelper::parse()`.
-- Replaced `new \DateTime($phasePrevious['end_date'])` with `DateHelper::parse()` in final enrollment detail.
+### 6. `CampaignWaitlistService.php` — Waitlist Fix
+- Injected `AdjustmentCourseRepository` into the constructor.
+- Loaded adjustment map in `getStudentWaitlistedCourses()`, `getAvailableWaitlistCourses()`, and `validateWaitlistEligibility()`.
+- Fixed 3 bare `getTotalPromotionSeats()` calls.
+
+### 7. `WaitlistAutoOfferService.php` — Auto-Offer Fix
+- Injected `AdjustmentCourseRepository` into the constructor.
+- Loaded adjustment map in `processAutoOffer()` and used adjusted seats for available seat calculation.
+
+### 8. `EnrollmentViewService.php` — Enrollment View Fix
+- Injected `AdjustmentCourseRepository` into the constructor.
+- Loaded adjustment map and passed to `buildEnrolledCoursesData()`, `buildWaitlistedCoursesData()`, and `getOriginalBidsByType()`.
+- Fixed 3 bare `getTotalPromotionSeats()` calls.
+
+### 9. `EnrollmentDashboardService.php` — Dashboard Fix
+- Used the already-loaded `$classAdjustment` to apply seat capacity override (1 bare call fixed).
 
 ## Impact
-- **No Database Migrations**: All changes are in the interpretation/application layer.
-- **Eliminates DST Drift**: With the app timezone forced to UTC, Doctrine reads and writes naive `DATETIME` columns as UTC. No more +1h offset from Europe/Paris DST.
-- **Consistent Activation Timestamps**: `activatePhase()` now writes UTC ISO strings to JSON config, matching what the PM configured.
-- **Backward Compatible**: `DateHelper::utcNow()` is a drop-in replacement for `new \DateTime()` and `DateHelper::parse()` for `new \DateTime($string)`.
+- **No Database Migrations**: Uses existing `AdjustmentCourse` entity and `AdjustmentCourseRepository::findByCampaignIndexedByClass()`.
+- **Affected roles**: Students (now see correct PM-configured seat capacity). Programme Managers (no change — already correct).
+- **Regression risk**: Low — each change adds an adjustment lookup that falls back to the existing `getTotalPromotionSeats()` when no `AdjustmentCourse` override exists.
+- **9 files modified**, all within `src/Domain/Campaign/ActiveCampaign/`.
 
 ## Verification Steps
-1. Configure dates in PM portal and verify they match exactly in Student portal (no +1h shift).
-2. Activate/close a phase and verify `actual_start_date`/`actual_end_date` in the JSON config are UTC.
-3. Cross a DST boundary (e.g. March 28–30) and verify no drift in countdown timers.
-4. Verify campaign CRUD operations (create, update, duplicate, delete) preserve correct dates.
-5. Verify admin dashboard phase status (OPEN/COMPLETED/CLOSE) is computed correctly.
+1. Create a campaign with bidding module. Set seat capacity to "3" for all courses in bidding configuration.
+2. Close pre-bidding, open bidding. Impersonate a student, submit a bid.
+3. Verify: bidding round detail page shows `total_seats = 3` (not 90).
+4. Verify: PM dashboard still shows `total_seats = 3`.
+5. Verify: available courses list shows `total_seats = 3`.
+6. Verify: with 3 enrolled students, a 4th student's bid is correctly rejected or waitlisted.
+7. Verify: waitlist and add/drop views also show `total_seats = 3`.
+8. Verify: enrollment view shows `total_seats = 3`.
