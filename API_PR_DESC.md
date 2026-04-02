@@ -68,7 +68,8 @@ Students were blocked from bidding on the same course in parallel bidding rounds
 - Courses enrolled/waitlisted in other campaign modules are disabled in the dropdown with `already_enrolled_in_campaign` / `already_waitlisted_in_campaign` reason.
 
 ### 7. Test Coverage
-- `AddDropValidatorPreviousEnrollmentTest` — parallel bidding duplicate blocking, resolution via drop, partial resolution failures, cross-phase duplicate tests, capital validation scenarios.
+- `AddDropValidatorPreviousEnrollmentTest` — parallel bidding duplicate blocking, resolution via drop, partial resolution failures, cross-phase duplicate tests, capital validation scenarios. Also includes module-scoped duplicate detection tests: cross-module same-course NOT treated as duplicate, within-module duplicate rejected, null moduleId campaign-wide detection, and drop-resolution within module.
+- Fixed pre-existing test failures: updated `validateNoDuplicateCoursesWithCurrentEnrollment` calls to include `$waitlist` parameter, fixed `Course::getId()` mock return types (`?string`), replaced `willReturnMap` with `willReturnCallback` for `classesRepository->find()` to avoid PHPUnit default-parameter matching issues.
 - `AddDropServiceNullSafetyTest` — summary fallback, audit log fallback, null `studentData` progression.
 
 ## Impact
@@ -94,4 +95,4 @@ Students were blocked from bidding on the same course in parallel bidding rounds
 10. Verify negative capital submissions are blocked.
 11. Verify dropping courses targets only the current bidding round module.
 12. Verify courses from a prior campaign still show as "Previously Enrolled" in bidding dropdowns.
-13. Run PHPUnit tests: `AddDropServiceNullSafetyTest` and `AddDropValidatorPreviousEnrollmentTest`.
+13. Run PHPUnit tests: `AddDropServiceNullSafetyTest` and `AddDropValidatorPreviousEnrollmentTest` with `php vendor/phpunit/phpunit/phpunit tests/Unit/Domain/Campaign/ActiveCampaign/Validator/AddDropValidatorPreviousEnrollmentTest.php`.
