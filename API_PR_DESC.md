@@ -1,67 +1,45 @@
-# Fix: Seat Capacity Resets to Default After Student Bid Submission
+# Fix: Waitlist Limit Per Bidding Cycle Not Enforced
 
 ## Problem
-Jira: [DPBFAD-976](https://insead.atlassian.net/browse/DPBFAD-976)
+Jira: [DPBFAD-718](https://insead.atlassian.net/browse/DPBFAD-718)
 
-When a PM configures seat capacity to **3** for courses via `AdjustmentCourse` records, the student-facing bidding round detail initially displays the correct value. However, after a student submits a bid, the seat capacity reverts to the default **90** (the sum of `ClassPromotions.promotionSeats`).
+The Programme Manager can configure the maximum number of waitlisted courses a student may retain per bidding cycle via the Add/Drop & Waitlist module configuration. However, this limit was not enforced due to three interrelated bugs:
 
-The PM dashboard continues to show "3" because `AdminCampaignDetailService` correctly reads from the `AdjustmentCourse` table. The student-facing code paths inconsistently apply this override.
+1. **Config key mismatch**: The admin UI saves the per-student waitlist limit as `waitlist_capacity`, but backend services read `max_waitlist_slots_per_student` (never set by admin) — causing enforcement to silently skip.
+2. **Validator never called**: `AddDropValidator::validateMaxWaitlistSlotsPerStudent()` existed but was never wired into `AddDropService::submitAddDrop()`.
+3. **Wrong module lookup for display**: `EnrollmentViewService::getMaxWaitlistAllowed()` read from the `final_enrollment` module instead of `add_drop_waitlist`, and used incorrect config keys (`max_waitlist_per_student`, `max_waitlist_allowed`). It also contained dead code (`$campaignConfig = null ?? []`).
 
-**Root cause**: Multiple student-facing mappers, validators, and services read seat capacity directly from `$class->getTotalPromotionSeats()` instead of first checking the `AdjustmentCourse` table for PM-configured overrides. The pattern `$adjustment?->getSeatCapacity() ?? $class->getTotalPromotionSeats()` was correctly used in some code paths (e.g., `buildAddDropDetail()`, `getAvailableCourses()`) but missing in many others.
+## Changes Made
 
-## Changes
+### 1. `AddDropValidator.php` — Fix config key resolution + respect toggle
+- Added `limit_waitlist_capacity` toggle check — if `false` or not set, skip enforcement entirely.
+- Added `waitlist_capacity` as fallback after `max_waitlist_slots_per_student` so existing configs saved by admin UI are recognized.
 
-### 1. `CampaignToModuleDetailDtoMapper.php` — Primary Bug Fix
-- Loaded `$adjustmentConfigsMap` via `findByCampaignIndexedByClass()` at the top of `buildBiddingRoundDetail()` and `buildFinalEnrollmentDetail()`.
-- Replaced all bare `$class->getTotalPromotionSeats()` calls with the adjustment fallback pattern in both methods (enrolled, waitlisted, rejected sections).
+### 2. `AddDropService.php` — Wire validator into submission flow
+- Added call to `$this->validator->validateMaxWaitlistSlotsPerStudent()` after bid points validation (Step 9), before executing the add/drop operation. This enforces the per-student waitlist limit during student submissions.
 
-### 2. `CampaignToActiveBiddingRoundDtoMapper.php` — List View Fix
-- Injected `AdjustmentCourseRepository` into the constructor.
-- Loaded `$adjustmentMap` in `buildBiddingRoundModuleData()` and `buildAddDropModuleData()`.
-- Replaced all 5 bare `getTotalPromotionSeats()` calls across submitted bids, available courses, enrolled, allocated, and waitlisted sections.
+### 3. `EnrollmentViewService.php` — Fix module lookup + config keys
+- Changed module lookup from `getCurrentActivePhaseDetailsByModule('final_enrollment')` to `getCurrentActivePhaseDetailsByModule('add_drop_waitlist')`.
+- Replaced multi-fallback dead code with clean single-source lookup: `max_waitlist_slots_per_student` → `waitlist_capacity` → `0`.
+- Added `limit_waitlist_capacity` toggle check — returns `0` (unlimited) when toggle is disabled.
+- Removed dead-code block (`$campaignConfig = null ?? []`) and ineffective module iteration fallback.
 
-### 3. `BidValidator.php` — Validation Fix
-- Injected `AdjustmentCourseRepository` into the constructor.
-- Loaded adjustment map in `validateClassStatus()`.
-- Used adjusted seat capacity for the "has no available seats" check.
+### 4. `CampaignWaitlistService.php` — Fix config key fallback
+- Added `waitlist_capacity` to the fallback chain in `getMaxWaitlistPerStudent()`: `max_waitlist_slots_per_student` → `waitlist_capacity` → `max_waitlist_per_student` → `0`.
 
-### 4. `AddDropValidator.php` — Validation Fix
-- Injected `AdjustmentCourseRepository` into the constructor.
-- Added `loadAdjustmentMap(Campaign)` method with per-campaign caching.
-- Fixed 3 bare calls in `validateWaitlistCapacity()`, `validateClassAvailability()`, and `validateMaxWaitlistSlotsPerStudent()`.
-
-### 5. `AddDropService.php` — Wire Adjustment Map
-- Added `$this->validator->loadAdjustmentMap($campaign)` call before validator invocations in `submitAddDrop()`.
-
-### 6. `CampaignWaitlistService.php` — Waitlist Fix
-- Injected `AdjustmentCourseRepository` into the constructor.
-- Loaded adjustment map in `getStudentWaitlistedCourses()`, `getAvailableWaitlistCourses()`, and `validateWaitlistEligibility()`.
-- Fixed 3 bare `getTotalPromotionSeats()` calls.
-
-### 7. `WaitlistAutoOfferService.php` — Auto-Offer Fix
-- Injected `AdjustmentCourseRepository` into the constructor.
-- Loaded adjustment map in `processAutoOffer()` and used adjusted seats for available seat calculation.
-
-### 8. `EnrollmentViewService.php` — Enrollment View Fix
-- Injected `AdjustmentCourseRepository` into the constructor.
-- Loaded adjustment map and passed to `buildEnrolledCoursesData()`, `buildWaitlistedCoursesData()`, and `getOriginalBidsByType()`.
-- Fixed 3 bare `getTotalPromotionSeats()` calls.
-
-### 9. `EnrollmentDashboardService.php` — Dashboard Fix
-- Used the already-loaded `$classAdjustment` to apply seat capacity override (1 bare call fixed).
+### 5. Unit Tests — `AddDropValidatorWaitlistSlotsTest.php`
+- Test: `waitlist_capacity` fallback enforces limit when `max_waitlist_slots_per_student` is absent.
+- Test: No validation when `limit_waitlist_capacity` toggle is `false`.
+- Test: `max_waitlist_slots_per_student` takes precedence over `waitlist_capacity` when both present.
 
 ## Impact
-- **No Database Migrations**: Uses existing `AdjustmentCourse` entity and `AdjustmentCourseRepository::findByCampaignIndexedByClass()`.
-- **Affected roles**: Students (now see correct PM-configured seat capacity). Programme Managers (no change — already correct).
-- **Regression risk**: Low — each change adds an adjustment lookup that falls back to the existing `getTotalPromotionSeats()` when no `AdjustmentCourse` override exists.
-- **9 files modified**, all within `src/Domain/Campaign/ActiveCampaign/`.
+- **No Database Migrations**: All changes are behavioral fixes in PHP service logic.
+- **Backward Compatible**: Existing configs storing the limit as `waitlist_capacity` continue to work via fallback. The `CampaignToModuleDetailDtoMapper` already had the correct fallback and required no changes.
+- **No API contract changes**: `max_waitlist_allowed` field in response DTOs is unchanged — it now returns the correct value.
 
 ## Verification Steps
-1. Create a campaign with bidding module. Set seat capacity to "3" for all courses in bidding configuration.
-2. Close pre-bidding, open bidding. Impersonate a student, submit a bid.
-3. Verify: bidding round detail page shows `total_seats = 3` (not 90).
-4. Verify: PM dashboard still shows `total_seats = 3`.
-5. Verify: available courses list shows `total_seats = 3`.
-6. Verify: with 3 enrolled students, a 4th student's bid is correctly rejected or waitlisted.
-7. Verify: waitlist and add/drop views also show `total_seats = 3`.
-8. Verify: enrollment view shows `total_seats = 3`.
+1. As PM, configure waitlist limit to 5 in Add/Drop & Waitlist module config (Enable Waitlist Capacity toggle ON).
+2. As student, verify the Add/Drop page shows `Max waitlist allowed: 5`.
+3. As student, attempt to retain more than 5 waitlisted courses — verify submission is blocked with error message.
+4. Disable the "Enable Waitlist Capacity" toggle — verify no limit is enforced and `Max waitlist allowed` shows 0.
+5. Verify existing campaigns with previously saved configs still display and enforce limits correctly.
