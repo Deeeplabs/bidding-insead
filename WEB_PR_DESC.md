@@ -1,28 +1,39 @@
-# Fix: Student Time Value Display Incorrectly
+# Fix: Add/Drop Seat Availability Display & Course Discoverability
 
 ## Problem
-Jira: [DPBFAD-919](https://insead.atlassian.net/browse/DPBFAD-919)
+Jira: [DPBFAD-726](https://insead.atlassian.net/browse/DPBFAD-726)
 
-Students in the SGT (GMT+8) timezone were seeing bidding round closing times shifted by exactly 8 hours. Additionally, during DST transitions (e.g., March 29 for Europe/Paris), a 1-hour shift was observed between the PM configuration and student dashboard views, presenting timers that displayed "1d 23h" for mathematically configured 48-hour periods.
+During the Add/Drop phase, students could not easily identify which course sections had open seats. The course selector dropdown showed courses without any seat availability information, and after enrolling in a course, the available courses list showed stale seat counts until the student navigated away and back.
 
-This issue was caused by a combination of the backend drifting timezone offsets across DST boundaries, and a **Double-Parsing Bug in the Frontend**: Components stripped timezone info during intermediate formatting into local strings, then re-parsed these local strings back as UTC using `parseUtc()`, leading to redundant offsets being applied at the final rendering step.
+## Changes
 
-1. **Enrolled Courses Not Disabled in Dropdown**: In the Add/Drop & Waitlist phase, students were able to select courses they had already enrolled in from the dropdown. The system only blocked them after submission/save with a hard error ("Already enrolled in [Course]"). Enrolled courses should be preemptively disabled at the UI level.
-2. **Inconsistent Validation**: Validation logic was scattered and sometimes bypassed the full course context, relying only on credit numbers.
-3. **Type Inconsistency**: A mismatch in the `use-bidding-form.ts` hook led to potential runtime or build issues when passing course data to validators.
-4. **Incorrect Priority of Enrolled Check**: The `is_enrolled` check in `getUnavailableReason()` was evaluated after credit/deadline/conflict checks, meaning enrolled courses could show misleading reasons instead of "Previously Enrolled".
+### 1. `CourseOptionContent.tsx` — Display Seat Availability Per Section
+- Added a seat availability chip next to each course option in the add/drop course selector dropdown.
+- Shows `{available_seats}/{total_seats} seats` for each section.
+- Sections with available seats display a green-bordered chip; full sections display a red-bordered chip.
+- Chip renders conditionally only when `available_seats` and `total_seats` are present in the course data.
 
-### 1. Frontend (bidding-web)
-- **`src/features/bidding/components/shared/bidding-card/CollapsePanelExtra.tsx`**: Refactored `parsedStartDate` and `parsedEndDate` to perpetually remain as `Date` objects returned by the initial `parseUtc()`, never getting downgraded to naive strings.
-- **`src/features/bidding/components/bid-submission/HeaderSection.tsx`**: Applied similar refactoring to remove intermediate local-string formatting that stripped timezone context before passing to phase utilities.
+### 2. `campaign.mutations.ts` — Invalidate Cache After Enrollment
+- After a successful add/drop submission, the `useSubmitAddDrop` mutation now also invalidates:
+  - `campaignKeys.addDrop()` — forces the available courses list to refetch with updated seat counts.
+  - `campaignKeys.enrollments()` — forces the student's enrollment list to refresh.
+- Previously only `detail` and `lists` were invalidated. The available courses query was stale until manual refresh.
+
+### 3. `add-drop.type.ts` — No Changes Needed
+- The `AvailableCourseResponse` type already includes `available_seats`, `total_seats`, and `enrollment_count` fields. No modifications required.
+
+### 4. `campaign.service.ts` / `campaign.queries.ts` — No Changes Needed
+- The `getAddDropAvailableCourses` service method already accepts arbitrary query parameters via `Record<string, string>`. The new backend `availability` and `sort_by` parameters can be passed directly by callers without service changes.
+- Query keys already include params for proper cache keying.
 
 ## Impact
-- **Accurate Time Display**: Students now see the correct local times for all bidding round transitions, matching the 8-hour gap perfectly.
-- **Zero-Shift Logic**: The `Date` objects are maintained perfectly throughout the pipeline, allowing the countdown timer to mathematically strictly measure the duration gap, completely mitigating the "1d 23h" discrepancy when combined with the backend `DateHelper` fix.
-- **Consistent Round Status**: Phase status calculations (Upcoming, Ongoing, Closed) and countdowns are now absolutely synchronized with the true system deadlines.
+- **Immediate Seat Visibility**: Students can see at a glance which sections have open seats before selecting.
+- **Fresh Data After Enrollment**: Seat counts and enrollment lists update automatically after submission — no manual refresh needed.
+- **No Breaking Changes**: All changes are additive. Existing behavior is preserved when new parameters are not used.
 
-## Testing / Verification Steps
-1. Create a bidding round crossing a DST boundary (e.g., March 28 00:00 to March 30 00:00).
-2. Login as a Student.
-3. Verify that the countdown timers display exactly "48h / 2d", resolving the "1d 23h" gap.
-4. Login as a student with SGT profile to verify offset accuracy.
+## Verification Steps
+1. Navigate to add/drop page during an active campaign.
+2. Open the course selector dropdown — verify each course section shows a seat availability chip (e.g., "3/30 seats").
+3. Verify full sections show a red chip ("0/30 seats") and available sections show a green chip.
+4. Enroll in a course — verify the course list refreshes automatically and the seat count decrements without manual page refresh.
+5. Verify the enrollment list updates immediately to include the newly enrolled course.

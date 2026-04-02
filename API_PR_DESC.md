@@ -1,67 +1,56 @@
-# Fix: Seat Capacity Resets to Default After Student Bid Submission
+# Fix: Add/Drop Seat Availability & Concurrency Protection
 
 ## Problem
-Jira: [DPBFAD-976](https://insead.atlassian.net/browse/DPBFAD-976)
+Jira: [DPBFAD-726](https://insead.atlassian.net/browse/DPBFAD-726)
 
-When a PM configures seat capacity to **3** for courses via `AdjustmentCourse` records, the student-facing bidding round detail initially displays the correct value. However, after a student submits a bid, the seat capacity reverts to the default **90** (the sum of `ClassPromotions.promotionSeats`).
+During the Add/Drop phase, courses with available seats were not reliably surfaced to students. Multiple issues existed:
 
-The PM dashboard continues to show "3" because `AdminCampaignDetailService` correctly reads from the `AdjustmentCourse` table. The student-facing code paths inconsistently apply this override.
-
-**Root cause**: Multiple student-facing mappers, validators, and services read seat capacity directly from `$class->getTotalPromotionSeats()` instead of first checking the `AdjustmentCourse` table for PM-configured overrides. The pattern `$adjustment?->getSeatCapacity() ?? $class->getTotalPromotionSeats()` was correctly used in some code paths (e.g., `buildAddDropDetail()`, `getAvailableCourses()`) but missing in many others.
+1. **Silent course exclusion**: `AddDropAvailableCourseService` filtered out courses when `ClassPromotions` records were missing or promotion matching failed, even when seats were available via `SimulationAdjustmentCourse` or `AdjustmentCourse` overrides. `CampaignCourseService::buildAvailableCourse()` applied a strict non-zero `ClassPromotions.promotionSeats` filter at the query level, hiding these courses entirely.
+2. **No concurrency protection**: `AddDropService::executeCampaignAddDrop()` read seat counts and created bids without any database-level locking, allowing race conditions where two students both see 1 available seat and both enroll.
+3. **No server-side sort/filter by availability**: Students had no way to filter or sort courses by seat availability from the API. The existing `waitlist` boolean parameter only excluded full courses but did not support sorting.
 
 ## Changes
 
-### 1. `CampaignToModuleDetailDtoMapper.php` — Primary Bug Fix
-- Loaded `$adjustmentConfigsMap` via `findByCampaignIndexedByClass()` at the top of `buildBiddingRoundDetail()` and `buildFinalEnrollmentDetail()`.
-- Replaced all bare `$class->getTotalPromotionSeats()` calls with the adjustment fallback pattern in both methods (enrolled, waitlisted, rejected sections).
+### 1. `AddDropAvailableCourseService.php` — Fix Available Course Filtering
+- Added fallback seat calculation when `ClassPromotions` records are missing or promotion matching fails.
+- When `ClassPromotions`-based seats return zero, the system now checks `SimulationAdjustmentCourse` and `AdjustmentCourse` overrides before excluding the course.
+- Logs a warning via Symfony logger when falling back to override-based seats (includes class_id, course_id, override source).
+- Moved `simulationAdjustmentsMap` and `adjustmentConfigsMap` loading before the class filtering loop to support fallback checks.
+- Passes `relaxPromotionFilter => true` to `CampaignCourseService::buildAvailableCourse()`.
 
-### 2. `CampaignToActiveBiddingRoundDtoMapper.php` — List View Fix
-- Injected `AdjustmentCourseRepository` into the constructor.
-- Loaded `$adjustmentMap` in `buildBiddingRoundModuleData()` and `buildAddDropModuleData()`.
-- Replaced all 5 bare `getTotalPromotionSeats()` calls across submitted bids, available courses, enrolled, allocated, and waitlisted sections.
+### 2. `CampaignCourseService.php` — Relax Promotion Filter
+- Added `relaxPromotionFilter` option to `buildAvailableCourse()`.
+- When `true`, the LEFT JOIN on classes skips the `ClassPromotions` non-zero seats subquery, and the course-level promotion-matching WHERE clause is bypassed.
+- All existing callers are unaffected (default is `false`). Only `AddDropAvailableCourseService` passes `true`.
 
-### 3. `BidValidator.php` — Validation Fix
-- Injected `AdjustmentCourseRepository` into the constructor.
-- Loaded adjustment map in `validateClassStatus()`.
-- Used adjusted seat capacity for the "has no available seats" check.
+### 3. `BidRepository.php` — Add Pessimistic Locking Query
+- Added `countEnrolledWithLock(Classes $class, Campaign $campaign): int` method.
+- Uses `LockMode::PESSIMISTIC_WRITE` (`SELECT ... FOR UPDATE`) when counting enrolled bids for a class.
+- Lock is scoped to the class's bid rows and held only for the duration of the enrollment transaction.
 
-### 4. `AddDropValidator.php` — Validation Fix
-- Injected `AdjustmentCourseRepository` into the constructor.
-- Added `loadAdjustmentMap(Campaign)` method with per-campaign caching.
-- Fixed 3 bare calls in `validateWaitlistCapacity()`, `validateClassAvailability()`, and `validateMaxWaitlistSlotsPerStudent()`.
+### 4. `AddDropService.php` — Wrap Enrollment in Transaction
+- Wrapped the enrollment processing loop in an explicit `beginTransaction()` / `commit()` / `rollBack()` block.
+- Replaced `countByClassAndStatusesAndCampaign()` with `countEnrolledWithLock()` for the seat availability check during enrollment.
+- Ensures that two concurrent enrollment requests for the same last seat will serialize: exactly one gets ENROLLED, the other gets WAITLISTED.
 
-### 5. `AddDropService.php` — Wire Adjustment Map
-- Added `$this->validator->loadAdjustmentMap($campaign)` call before validator invocations in `submitAddDrop()`.
+### 5. `AddDropAvailableCourseController.php` — Add Sort/Filter Parameters
+- Added `availability` query parameter (`available` | `all`, default `all`). When `available`, only courses with `available_seats > 0` are returned.
+- Added `sort_by` query parameter (`available_seats_desc` | `course_name_asc`). `available_seats_desc` sorts by available seats descending with ties broken by course name ascending.
+- Updated OpenAPI annotations to document new parameters.
+- The existing `waitlist` boolean now also respects the `available_seats > 0` check (consistent behavior).
 
-### 6. `CampaignWaitlistService.php` — Waitlist Fix
-- Injected `AdjustmentCourseRepository` into the constructor.
-- Loaded adjustment map in `getStudentWaitlistedCourses()`, `getAvailableWaitlistCourses()`, and `validateWaitlistEligibility()`.
-- Fixed 3 bare `getTotalPromotionSeats()` calls.
-
-### 7. `WaitlistAutoOfferService.php` — Auto-Offer Fix
-- Injected `AdjustmentCourseRepository` into the constructor.
-- Loaded adjustment map in `processAutoOffer()` and used adjusted seats for available seat calculation.
-
-### 8. `EnrollmentViewService.php` — Enrollment View Fix
-- Injected `AdjustmentCourseRepository` into the constructor.
-- Loaded adjustment map and passed to `buildEnrolledCoursesData()`, `buildWaitlistedCoursesData()`, and `getOriginalBidsByType()`.
-- Fixed 3 bare `getTotalPromotionSeats()` calls.
-
-### 9. `EnrollmentDashboardService.php` — Dashboard Fix
-- Used the already-loaded `$classAdjustment` to apply seat capacity override (1 bare call fixed).
+### 6. `AddDropAvailableCourseDto.php` — No Changes Needed
+- The DTO already contains `available_seats`, `total_seats`, and `enrollment_count` fields with OpenAPI annotations. No modifications required.
 
 ## Impact
-- **No Database Migrations**: Uses existing `AdjustmentCourse` entity and `AdjustmentCourseRepository::findByCampaignIndexedByClass()`.
-- **Affected roles**: Students (now see correct PM-configured seat capacity). Programme Managers (no change — already correct).
-- **Regression risk**: Low — each change adds an adjustment lookup that falls back to the existing `getTotalPromotionSeats()` when no `AdjustmentCourse` override exists.
-- **9 files modified**, all within `src/Domain/Campaign/ActiveCampaign/`.
+- **No Database Migrations**: All changes are in query logic, locking strategy, and API parameters.
+- **No Breaking API Changes**: Only additive query parameters (`availability`, `sort_by`). Default behavior is unchanged.
+- **Backward Compatible**: Existing callers of `buildAvailableCourse()` unaffected by `relaxPromotionFilter` (defaults to `false`).
+- **Lock Scope**: Pessimistic lock held < 100ms per class, scoped to single class bid rows. Negligible contention at INSEAD scale.
 
 ## Verification Steps
-1. Create a campaign with bidding module. Set seat capacity to "3" for all courses in bidding configuration.
-2. Close pre-bidding, open bidding. Impersonate a student, submit a bid.
-3. Verify: bidding round detail page shows `total_seats = 3` (not 90).
-4. Verify: PM dashboard still shows `total_seats = 3`.
-5. Verify: available courses list shows `total_seats = 3`.
-6. Verify: with 3 enrolled students, a 4th student's bid is correctly rejected or waitlisted.
-7. Verify: waitlist and add/drop views also show `total_seats = 3`.
-8. Verify: enrollment view shows `total_seats = 3`.
+1. Test available courses endpoint with `availability=available` — verify only courses with seats are returned.
+2. Test `sort_by=available_seats_desc` — verify correct sort order.
+3. Test with missing `ClassPromotions` records — verify courses with `SimulationAdjustmentCourse`/`AdjustmentCourse` overrides still appear.
+4. Open two browser sessions, both viewing a course with 1 seat. Submit enrollment simultaneously — verify exactly one gets ENROLLED and the other gets WAITLISTED.
+5. Run existing PHPUnit test suite (`bin/phpunit`) — verify no regressions.
